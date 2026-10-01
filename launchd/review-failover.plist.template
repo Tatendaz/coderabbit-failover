@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Replace __REPO__, __OWNER__ and __HOME__, then copy to ~/Library/LaunchAgents/. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>local.review-failover</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/bin/env</string><string>python3</string>
+    <string>__REPO__/reviewer/local_reviewer.py</string>
+  </array>
+  <key>StartInterval</key><integer>180</integer>
+  <key>RunAtLoad</key><true/>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key><string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:__HOME__/.local/bin</string>
+    <key>REVIEW_FAILOVER_OWNER</key><string>__OWNER__</string>
+  </dict>
+  <key>StandardOutPath</key><string>__HOME__/.review-failover/reviewer.log</string>
+  <key>StandardErrorPath</key><string>__HOME__/.review-failover/reviewer.log</string>
+</dict>
+</plist>

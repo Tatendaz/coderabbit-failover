@@ -1,0 +1,312 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>coderabbit-failover: one CodeRabbit review budget for all your agents, and a backup review when it runs out</title>
+<meta name="description" content="A Claude Code skill for people who run many coding agents against CodeRabbit. A shared ledger books each review slot before it is spent. When CodeRabbit is rate-limited, a reviewer on your Mac reviews the PR with Claude Code and posts a review-failover commit status. MIT.">
+<link rel="canonical" href="https://tatendaz.github.io/coderabbit-failover/">
+<link rel="alternate" type="text/markdown" href="/coderabbit-failover/index.md" title="Markdown version of this page">
+<link rel="describedby" href="/llms.txt">
+<meta name="theme-color" content="#0d0f12">
+<meta property="og:type" content="website">
+<meta property="og:title" content="coderabbit-failover: one CodeRabbit budget for all your agents">
+<meta property="og:description" content="A Claude Code skill. A shared ledger books each CodeRabbit review slot. When CodeRabbit is rate-limited, a reviewer on your Mac reviews the PR with Claude Code instead. MIT.">
+<meta property="og:url" content="https://tatendaz.github.io/coderabbit-failover/">
+<meta property="og:image" content="https://tatendaz.github.io/coderabbit-failover/social-preview.png">
+<meta property="og:image:width" content="1280">
+<meta property="og:image:height" content="640">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="coderabbit-failover: one CodeRabbit budget for all your agents">
+<meta name="twitter:description" content="A Claude Code skill. A shared ledger books each CodeRabbit review slot. When CodeRabbit is rate-limited, a reviewer on your Mac reviews the PR with Claude Code instead. MIT.">
+<meta name="twitter:image" content="https://tatendaz.github.io/coderabbit-failover/social-preview.png">
+<meta name="twitter:creator" content="@realtatendazhou">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%E2%87%86%3C/text%3E%3C/svg%3E">
+<script>
+(function(){
+  try{
+    var q=new URLSearchParams(location.search).get('theme');
+    if(q!=='light'&&q!=='dark'){q=null;}
+    var t=q||localStorage.getItem('cf-theme');
+    if(t==='light'||t==='dark'){document.documentElement.setAttribute('data-theme',t);}
+  }catch(e){}
+})();
+</script>
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  "name": "coderabbit-failover",
+  "operatingSystem": "macOS",
+  "applicationCategory": "DeveloperApplication",
+  "description": "Claude Code skill that shares one CodeRabbit review budget across coding agents through a locked ledger, and runs a local Claude Code backup review when CodeRabbit is rate-limited.",
+  "url": "https://tatendaz.github.io/coderabbit-failover/",
+  "downloadUrl": "https://github.com/Tatendaz/coderabbit-failover",
+  "license": "https://github.com/Tatendaz/coderabbit-failover/blob/main/LICENSE",
+  "author": {"@type": "Person", "name": "Tatenda Zhou", "url": "https://tatendaz.github.io/"},
+  "offers": {"@type": "Offer", "price": "0", "priceCurrency": "USD"}
+}
+</script>
+<style>
+  :root{
+    --bg:#0d0f12; --panel:#15181d; --panel2:#1b1f25; --line:#252a32;
+    --text:#eceef1; --muted:#98a1ac; --accent:#d97757; --link:#e08a6c;
+    --btn-bg:#d97757; --btn-text:#16181d;
+    --code-bg:#0b0d10; --code-line:#242933; --code-text:#d7dae0; --code-dim:#8b93a1; --code-ok:#87d787;
+    --mono:ui-monospace,"SF Mono",SFMono-Regular,Menlo,Consolas,monospace;
+    --gap-section:clamp(72px,11vw,104px);
+  }
+  @media (prefers-color-scheme: light){
+    :root:not([data-theme="dark"]){
+      --bg:#f6f7f8; --panel:#fdfdfe; --panel2:#eef0f2; --line:#dcdfe4;
+      --text:#1b1e24; --muted:#535e6b; --accent:#c2542f; --link:#a8492d;
+      --btn-bg:#b04c2c; --btn-text:#ffffff;
+    }
+  }
+  :root[data-theme="light"]{
+    --bg:#f6f7f8; --panel:#fdfdfe; --panel2:#eef0f2; --line:#dcdfe4;
+    --text:#1b1e24; --muted:#535e6b; --accent:#c2542f; --link:#a8492d;
+    --btn-bg:#b04c2c; --btn-text:#ffffff;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html{scroll-behavior:smooth}
+  @media (prefers-reduced-motion:reduce){html{scroll-behavior:auto}}
+  body{background:var(--bg);color:var(--text);font:16px/1.7 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:820px;margin:0 auto;padding:0 24px}
+  a{color:var(--link);text-decoration:none}
+  a:hover{text-decoration:underline}
+  code{font-family:var(--mono);font-size:.9em}
+  .topbar{display:flex;justify-content:flex-end;padding-top:22px}
+  .theme-btn{border:1px solid var(--line);background:transparent;color:var(--muted);border-radius:8px;padding:6px 14px;font:500 13.5px/1.4 inherit;font-family:inherit;cursor:pointer}
+  .theme-btn:hover{color:var(--text);border-color:var(--muted)}
+  .hero .wrap{padding-top:clamp(48px,8vw,76px);padding-bottom:var(--gap-section)}
+  .mark{color:var(--accent);font-size:clamp(30px,4.5vw,40px);line-height:1;display:block;margin-bottom:14px}
+  h1{font-size:clamp(36px,6vw,54px);letter-spacing:-.025em;line-height:1.05;overflow-wrap:anywhere}
+  .tagline{margin-top:20px;font-size:clamp(17px,2.6vw,20px);max-width:36em}
+  .tagline strong{font-weight:650}
+  .tagline .sub{display:block;margin-top:6px;color:var(--muted)}
+  .cta{display:flex;gap:12px;flex-wrap:wrap;margin-top:32px}
+  .btn{display:inline-block;padding:11px 24px;border-radius:8px;font-weight:600;border:1px solid var(--line);line-height:1.4}
+  .btn.primary{background:var(--btn-bg);color:var(--btn-text);border-color:transparent}
+  .btn.primary:hover{text-decoration:none;filter:brightness(1.08)}
+  .btn.primary:active,.btn.ghost:active{transform:translateY(1px)}
+  .btn.ghost{color:var(--text)}
+  .btn.ghost:hover{border-color:var(--accent);text-decoration:none}
+  .specimen{margin-top:56px}
+  .specimen-label{font-size:14px;color:var(--muted);margin-bottom:10px}
+  .term{background:var(--code-bg);border:1px solid var(--code-line);border-radius:12px;padding:20px 22px;font:14px/1.8 var(--mono);color:var(--code-text);overflow-x:auto;white-space:pre}
+  .term .d{color:var(--code-dim)}
+  .term .ok{color:var(--code-ok)}
+  .term .p{color:var(--code-dim);user-select:none}
+  .term-note{margin-top:12px;color:var(--muted);font-size:14px}
+  section{border-top:1px solid var(--line)}
+  section .wrap,footer .wrap{padding-top:var(--gap-section);padding-bottom:var(--gap-section)}
+  h2{font-size:clamp(24px,3.5vw,29px);letter-spacing:-.015em;margin-bottom:22px}
+  h3.sub-h{font-size:17px;letter-spacing:-.01em;margin:44px 0 14px}
+  p.lead{max-width:62ch}
+  p.lead + p.lead{margin-top:14px}
+  .dim{color:var(--muted)}
+  .how{margin-top:12px}
+  .how-row{display:grid;grid-template-columns:200px 1fr;gap:20px;padding:26px 0;border-top:1px solid var(--line)}
+  .how-row:first-child{border-top:none;padding-top:8px}
+  .how-row h3{font-size:16px;font-weight:650;letter-spacing:-.01em}
+  .how-row p{color:var(--muted);font-size:15.5px;max-width:56ch}
+  .how-row code,.tbl code,.steps code,.limits code,p.lead code{background:var(--panel2);border:1px solid var(--line);border-radius:5px;padding:1px 6px}
+  @media (max-width:640px){.how-row{grid-template-columns:1fr;gap:6px;padding:20px 0}}
+  .table-scroll{margin-top:28px;overflow-x:auto}
+  .tbl{width:100%;border-collapse:collapse;font-size:15px}
+  @media (max-width:640px){.tbl.stack tr{display:block;border-top:1px solid var(--line);padding:14px 0}.tbl.stack th,.tbl.stack td{display:block;border-top:none;padding:2px 0;width:auto;white-space:normal}.tbl.stack th{padding-bottom:6px}}
+  .tbl caption{text-align:left;color:var(--muted);font-size:14px;padding-bottom:12px}
+  .tbl th{text-align:left;font-weight:650;padding:14px 24px 14px 0;border-top:1px solid var(--line);white-space:nowrap;vertical-align:top;width:1%}
+  .tbl td{color:var(--muted);padding:14px 16px 14px 0;border-top:1px solid var(--line);vertical-align:top}
+  .tbl td.def{white-space:nowrap}
+  .steps{list-style:none;counter-reset:s;margin-top:8px}
+  .steps>li{counter-increment:s;position:relative;padding:22px 0 22px 40px;border-top:1px solid var(--line)}
+  .steps>li:first-child{border-top:none;padding-top:4px}
+  .steps>li::before{content:counter(s);position:absolute;left:0;top:22px;width:26px;height:26px;border-radius:50%;border:1px solid var(--line);color:var(--muted);font-size:13px;line-height:24px;text-align:center}
+  .steps>li:first-child::before{top:4px}
+  .steps .term{margin-top:12px}
+  .limits{list-style:none;margin-top:8px}
+  .limits li{padding:14px 0;border-top:1px solid var(--line);max-width:64ch}
+  .limits li:first-child{border-top:none;padding-top:0}
+  .limits li span{color:var(--muted)}
+  footer{border-top:1px solid var(--line)}
+  footer .wrap{padding-bottom:72px}
+  .built{display:grid;grid-template-columns:1fr auto;gap:28px;align-items:end}
+  .built h2{font-size:20px;margin-bottom:8px}
+  .built p{color:var(--muted);max-width:52ch}
+  .built .help{margin-top:14px;color:var(--text)}
+  .links{display:flex;flex-wrap:wrap;gap:10px;justify-content:flex-end}
+  .links a{border:1px solid var(--line);border-radius:8px;padding:8px 14px;color:var(--text);font-size:14.5px;font-weight:550}
+  .links a:hover{border-color:var(--accent);text-decoration:none}
+  @media (max-width:640px){.built{grid-template-columns:1fr}.links{justify-content:flex-start}}
+  .fine{margin-top:40px;color:var(--muted);font-size:14px}
+</style>
+</head>
+<body>
+
+<div class="wrap topbar">
+  <button class="theme-btn" id="theme-toggle" type="button" aria-label="Switch color theme">Light mode</button>
+</div>
+
+<main>
+<div class="hero">
+  <div class="wrap">
+    <span class="mark" aria-hidden="true">&#8646;</span>
+    <h1>coderabbit-failover</h1>
+    <p class="tagline"><strong>One CodeRabbit review budget for all your agents, and a backup review when it runs out.</strong>
+    <span class="sub">A Claude Code skill. A shared ledger books each review slot before an agent spends it. When CodeRabbit is rate-limited, a reviewer on your Mac reviews the PR instead.</span></p>
+    <div class="cta">
+      <a class="btn primary" href="https://github.com/Tatendaz/coderabbit-failover">View on GitHub</a>
+      <a class="btn ghost" href="#install">Install</a>
+    </div>
+    <div class="specimen">
+      <p class="specimen-label">What an agent runs when it wants a review:</p>
+<div class="term"><span class="p">$ </span>budget run --kind pr --repo OWNER/REPO --pr N -- \
+    gh pr comment N -R OWNER/REPO --body "@coderabbitai review"
+<span class="d"># exit 75 means hold. Do not wait for the window:</span>
+<span class="p">$ </span>budget failover --repo OWNER/REPO --pr N</div>
+      <p class="term-note"><code>budget</code> is <code>python3 &lt;skill&gt;/scripts/coderabbit_budget.py</code>. The commands are the ones <a href="https://github.com/Tatendaz/coderabbit-failover/blob/main/SKILL.md">SKILL.md</a> tells the agent to use.</p>
+    </div>
+  </div>
+</div>
+
+<section>
+  <div class="wrap">
+    <h2>Who it is for</h2>
+    <p class="lead">People who run many coding agents against CodeRabbit. CodeRabbit limits reviews per developer, in one pool shared by every repo and PR, and parallel agents burn that pool fast.</p>
+    <p class="lead dim">I use it to let agents merge PRs on their own when CI is green and a real review passed on the head commit. The ledger stops two agents from spending the same slot. The backup review means a PR never sits waiting for the next window.</p>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>How it works</h2>
+    <div class="how">
+      <div class="how-row">
+        <h3>One ledger</h3>
+        <p><code>scripts/coderabbit_budget.py</code> keeps one file, <code>~/.claude/coderabbit/ledger.json</code>. <code>run</code> checks the budget and books the slot under a file lock, then runs your command. On hold it exits 75 and never runs it. If CodeRabbit answers with a rate-limit message, the slot is given back and the stated wait is recorded for every session.</p>
+      </div>
+      <div class="how-row">
+        <h3>A reviewer on your Mac</h3>
+        <p><code>reviewer/local_reviewer.py</code> runs every 3 minutes under launchd. It starts on a CodeRabbit rate-limit comment, or on a <code>/open-code-review</code> comment from an owner, member or collaborator. <code>budget failover</code> posts that comment, and does not use CodeRabbit budget.</p>
+      </div>
+      <div class="how-row">
+        <h3>The backup review</h3>
+        <p>open-code-review in delegation mode with headless Claude Code (Opus 5.5, effort medium) on your subscription, in its own config folder: no user hooks, memory or CLAUDE.md, and the PR's settings, MCP and skills are ignored. Claude only reads the PR. The script posts inline comments, a summary, and a <code>review-failover</code> commit status.</p>
+      </div>
+      <div class="how-row">
+        <h3>Was the head reviewed?</h3>
+        <p><code>scripts/coderabbit_status.py</code> counts a review only if it ran on the current head commit: CodeRabbit's "Review completed" status, a "No actionable comments" comment whose range ends at the head, or <code>review-failover</code> success. The green stamp <code>@coderabbitai ignore</code> leaves does not count.</p>
+      </div>
+    </div>
+
+    <div class="table-scroll">
+    <table class="tbl">
+      <caption>The <code>review-failover</code> commit status</caption>
+      <tbody>
+        <tr><th scope="row"><code>pending</code></th><td>Review running.</td></tr>
+        <tr><th scope="row"><code>success</code></th><td>No critical or high findings.</td></tr>
+        <tr><th scope="row"><code>failure</code></th><td>Critical or high findings. Fix and push.</td></tr>
+        <tr><th scope="row"><code>error</code></th><td>Failed 3 times. Comment <code>/open-code-review</code> to retry.</td></tr>
+      </tbody>
+    </table>
+    </div>
+  </div>
+</section>
+
+<section id="install">
+  <div class="wrap">
+    <h2>Install</h2>
+    <p class="lead">Install the skill. Needs Python 3.10+ and an authenticated <code>gh</code>.</p>
+<div class="term" style="margin-top:20px">git clone https://github.com/Tatendaz/coderabbit-failover ~/.claude/skills/coderabbit-failover
+python3 ~/.claude/skills/coderabbit-failover/scripts/coderabbit_budget.py selftest</div>
+
+    <h3 class="sub-h">Set up the backup reviewer (macOS)</h3>
+    <ol class="steps">
+      <li>Install open-code-review where the reviewer finds it:
+<div class="term">mkdir -p ~/.review-failover/.tools &amp;&amp; cd ~/.review-failover/.tools
+npm install @alibaba-group/open-code-review@1.12.9</div>
+      </li>
+      <li>Put a Claude Code token in the Keychain. It reviews on your subscription, not API credits.
+<div class="term">claude setup-token
+security add-generic-password -U -a "$USER" -s claude-code-oauth-token -w</div>
+      </li>
+      <li>Try it. Nothing is posted with <code>--dry-run</code>.
+<div class="term">REVIEW_FAILOVER_OWNER=&lt;your-github-user&gt; python3 reviewer/local_reviewer.py --dry-run</div>
+      </li>
+      <li>Run it every 3 minutes: fill in <code>launchd/review-failover.plist.template</code>, copy it to <code>~/Library/LaunchAgents/local.review-failover.plist</code>, then <code>launchctl load ~/Library/LaunchAgents/local.review-failover.plist</code>.</li>
+    </ol>
+
+    <div class="table-scroll">
+    <table class="tbl stack">
+      <caption>Settings</caption>
+      <tbody>
+        <tr><th scope="row"><code>REVIEW_FAILOVER_OWNER</code></th><td class="def">(required)</td><td>GitHub user or org to watch.</td></tr>
+        <tr><th scope="row"><code>REVIEW_FAILOVER_HOME</code></th><td class="def"><code>~/.review-failover</code></td><td>State, cache, tools.</td></tr>
+        <tr><th scope="row"><code>REVIEW_FAILOVER_KEYCHAIN</code></th><td class="def"><code>claude-code-oauth-token</code></td><td>Keychain item with the token.</td></tr>
+        <tr><th scope="row"><code>REVIEW_FAILOVER_NOTIFY</code></th><td class="def">none</td><td>A command that takes one message, called after 3 failed tries.</td></tr>
+        <tr><th scope="row"><code>CODERABBIT_LEDGER_DIR</code></th><td class="def"><code>~/.claude/coderabbit</code></td><td>Where the ledger lives.</td></tr>
+      </tbody>
+    </table>
+    </div>
+  </div>
+</section>
+
+<section id="status">
+  <div class="wrap">
+    <h2>Status and limits</h2>
+    <p class="lead">First public release, October 2026. No tagged releases yet.</p>
+    <ul class="limits" style="margin-top:22px">
+      <li>The backup reviewer is macOS only. It uses launchd and the Keychain. <span>It runs while the Mac is awake and catches up on wake.</span></li>
+      <li>It covers repos you own that are not archived, not forks, and were pushed this year. <span>Fork PRs are skipped.</span></li>
+      <li>The ledger and the status script each have an offline <code>selftest</code> (49 and 70 checks). <span>The reviewer has <code>--dry-run</code> but no automated tests, and the repo has no CI.</span></li>
+      <li>The backup review is one model's opinion. <span>It catches a lot, not everything.</span></li>
+      <li>CodeRabbit's limit messages change. <span>If one stops being detected, add it to <code>RATE_RE</code>.</span></li>
+    </ul>
+  </div>
+</section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <div class="built">
+      <div>
+        <h2>Built by Tatenda Zhou</h2>
+        <p class="help" style="margin-top:4px">Need help making AI coding agents reliable? <a href="mailto:tatendaz@me.com?subject=Making%20AI%20coding%20agents%20reliable">tatendaz@me.com</a></p>
+      </div>
+      <nav class="links" aria-label="Tatenda Zhou elsewhere">
+        <a href="https://tatendaz.github.io/">More work</a>
+        <a href="https://x.com/realtatendazhou">Follow on X</a>
+        <a href="https://www.linkedin.com/in/tatendazhou">LinkedIn</a>
+      </nav>
+    </div>
+    <p class="fine">MIT licensed. Source on <a href="https://github.com/Tatendaz/coderabbit-failover">GitHub</a>. <a href="https://tatendaz.github.io/llms.txt">llms.txt</a></p>
+  </div>
+</footer>
+
+<script>
+  (function(){
+    var root=document.documentElement;
+    var toggle=document.getElementById('theme-toggle');
+    function effective(){
+      var t=root.getAttribute('data-theme');
+      if(t==='light'||t==='dark'){return t;}
+      return (window.matchMedia&&window.matchMedia('(prefers-color-scheme: light)').matches)?'light':'dark';
+    }
+    function label(){toggle.textContent=effective()==='light'?'Dark mode':'Light mode';}
+    toggle.addEventListener('click',function(){
+      var next=effective()==='light'?'dark':'light';
+      root.setAttribute('data-theme',next);
+      try{localStorage.setItem('cf-theme',next);}catch(e){}
+      label();
+    });
+    if(window.matchMedia){
+      var mq=window.matchMedia('(prefers-color-scheme: light)');
+      if(mq.addEventListener){mq.addEventListener('change',label);}
+    }
+    label();
+  })();
+</script>
+</body>
+</html>

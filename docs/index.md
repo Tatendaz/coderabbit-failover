@@ -17,7 +17,7 @@ $ budget failover --repo OWNER/REPO --pr N
 
 People who run many coding agents against CodeRabbit. CodeRabbit limits reviews per developer, in one pool shared by every repo and PR, and parallel agents burn that pool fast.
 
-I use it to let agents merge PRs on their own when CI is green and a real review passed on the head commit. The ledger stops two agents from spending the same slot. The backup review means a PR never sits waiting for the next window.
+I use it to let agents merge PRs on their own when CI is green and a real review passed on the head commit. The ledger stops two agents from spending the same slot. For open, same-repo PRs in repos it watches, the backup review runs instead of waiting for CodeRabbit's next window.
 
 ## How it works
 

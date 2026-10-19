@@ -175,7 +175,7 @@
   <div class="wrap">
     <h2>Who it is for</h2>
     <p class="lead">People who run many coding agents against CodeRabbit. CodeRabbit limits reviews per developer, in one pool shared by every repo and PR, and parallel agents burn that pool fast.</p>
-    <p class="lead dim">I use it to let agents merge PRs on their own when CI is green and a real review passed on the head commit. The ledger stops two agents from spending the same slot. The backup review means a PR never sits waiting for the next window.</p>
+    <p class="lead dim">I use it to let agents merge PRs on their own when CI is green and a real review passed on the head commit. The ledger stops two agents from spending the same slot. For open, same-repo PRs in repos it watches, the backup review runs instead of waiting for CodeRabbit's next window.</p>
   </div>
 </section>
 
@@ -232,8 +232,9 @@ npm install @alibaba-group/open-code-review@1.12.9</div>
 <div class="term">claude setup-token
 security add-generic-password -U -a "$USER" -s claude-code-oauth-token -w</div>
       </li>
-      <li>Try it. Nothing is posted with <code>--dry-run</code>. Run it from the skill folder, <code>~/.claude/skills/coderabbit-failover</code>, because step 1 left you in <code>~/.review-failover/.tools</code>.
-<div class="term">REVIEW_FAILOVER_OWNER=&lt;your-github-user&gt; python3 reviewer/local_reviewer.py --dry-run</div>
+      <li>Try it. Nothing is posted with <code>--dry-run</code>. Step 1 left you in <code>~/.review-failover/.tools</code>, so go back to the skill folder first.
+<div class="term">cd ~/.claude/skills/coderabbit-failover
+REVIEW_FAILOVER_OWNER=&lt;your-github-user&gt; python3 reviewer/local_reviewer.py --dry-run</div>
       </li>
       <li>Run it every 3 minutes: fill in <code>launchd/review-failover.plist.template</code> (in the skill folder), copy it to <code>~/Library/LaunchAgents/local.review-failover.plist</code>, then <code>launchctl load ~/Library/LaunchAgents/local.review-failover.plist</code>.</li>
     </ol>

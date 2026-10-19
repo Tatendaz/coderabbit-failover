@@ -232,10 +232,10 @@ npm install @alibaba-group/open-code-review@1.12.9</div>
 <div class="term">claude setup-token
 security add-generic-password -U -a "$USER" -s claude-code-oauth-token -w</div>
       </li>
-      <li>Try it. Nothing is posted with <code>--dry-run</code>.
+      <li>Try it. Nothing is posted with <code>--dry-run</code>. Run it from the skill folder, <code>~/.claude/skills/coderabbit-failover</code>, because step 1 left you in <code>~/.review-failover/.tools</code>.
 <div class="term">REVIEW_FAILOVER_OWNER=&lt;your-github-user&gt; python3 reviewer/local_reviewer.py --dry-run</div>
       </li>
-      <li>Run it every 3 minutes: fill in <code>launchd/review-failover.plist.template</code>, copy it to <code>~/Library/LaunchAgents/local.review-failover.plist</code>, then <code>launchctl load ~/Library/LaunchAgents/local.review-failover.plist</code>.</li>
+      <li>Run it every 3 minutes: fill in <code>launchd/review-failover.plist.template</code> (in the skill folder), copy it to <code>~/Library/LaunchAgents/local.review-failover.plist</code>, then <code>launchctl load ~/Library/LaunchAgents/local.review-failover.plist</code>.</li>
     </ol>
 
     <div class="table-scroll">

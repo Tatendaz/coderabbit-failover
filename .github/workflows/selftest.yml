@@ -1,0 +1,27 @@
+name: Self-tests
+
+# Offline logic checks for the budget ledger and the review-status probe.
+# Both scripts use only the Python standard library and touch no network.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  selftest:
+    name: Self-tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Budget ledger self-test
+        run: python3 scripts/coderabbit_budget.py selftest
+      - name: Review-status self-test
+        run: python3 scripts/coderabbit_status.py --selftest

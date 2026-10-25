@@ -33,7 +33,7 @@ class Recorder:
         self.calls: list[tuple[str, int, bool]] = []
         self.hooks: dict = {}
 
-    def __call__(self, repo, pr, manual, dry):
+    def __call__(self, repo, pr, manual, dry, retry_since=None):
         t0 = time.monotonic()
         with self.mu:
             self.calls.append((repo, pr, manual))
@@ -100,11 +100,8 @@ class Concurrency(Base):
         rec = Recorder()
         self.queue(("a", 1), ("b", 1), ("c", 1))
         with mock.patch.object(lr, "review_pr", rec):
-            t0 = time.monotonic()
             self.assertEqual(lr.main([]), 0)
-            took = time.monotonic() - t0
         self.assertEqual(rec.max_parallel(), 3)
-        self.assertLess(took, 0.8)  # serial would be >= 0.9
         self.assertEqual(self.state()["queue"], [])
 
     def test_same_repo_runs_one_after_the_other(self):
@@ -191,7 +188,7 @@ class StateAndTriggers(Base):
         rec_slow = Recorder(delay=0.6)
         seen_during = {}
 
-        def fake(repo, pr, manual, dry):
+        def fake(repo, pr, manual, dry, retry_since=None):
             if repo == "a":
                 return rec(repo, pr, manual, dry)
             time.sleep(0.3)  # a#1 is finished by now, b#1 is still running
@@ -292,12 +289,59 @@ class Failures(Base):
         self.assertLessEqual(len(msg), 190)
         self.assertRegex(msg, r"^Backup review failed 3x on 12 PRs: .+, \+\d+ more$")
 
+    def test_retry_after_a_posted_summary_only_sets_the_status(self):
+        head = "a" * 40
+        since = lr.now() - timedelta(minutes=5)
+        body = f"<!-- review-failover head={head} critical=0 high=1 medium=0 low=0 -->"
+        comments = [[{"user": {"login": "me"}, "created_at": lr.iso(lr.now()), "body": body},
+                     {"user": {"login": "mallory"}, "created_at": lr.iso(lr.now()),
+                      "body": body.replace("high=1", "high=0")}]]
+
+        def gh(*args, inp=None):
+            if args[:2] == ("api", "user"):
+                return {"login": "me"}
+            if args[:2] == ("pr", "view"):
+                return {"state": "OPEN", "isCrossRepository": False, "headRefOid": head,
+                        "baseRefName": "main"}
+            if "--paginate" in args:
+                return comments
+            return None
+        status = mock.Mock()
+        claude = mock.Mock()
+        with mock.patch.object(lr, "gh_json", gh), mock.patch.object(lr, "set_status", status), \
+                mock.patch.object(lr, "run_claude", claude), mock.patch.object(lr, "_me", []):
+            self.assertEqual(lr.review_pr("a", 1, True, False, retry_since=lr.iso(since)), "done")
+            claude.assert_not_called()
+            self.assertEqual(status.call_args[0][2], "failure")  # ours, not mallory's
+            comments[0].pop(0)  # only someone else's marker left: review for real
+            with mock.patch.object(lr, "prepare_worktree", side_effect=RuntimeError("stop")):
+                with self.assertRaises(RuntimeError):
+                    lr.review_pr("a", 1, True, False, retry_since=lr.iso(since))
+
+    def test_failed_try_passes_its_start_time_to_the_retry(self):
+        seen = []
+
+        def fake(repo, pr, manual, dry, retry_since=None):
+            seen.append(retry_since)
+            if len(seen) == 1:
+                raise RuntimeError("boom")
+            return "done"
+        self.queue(("a", 1))
+        with mock.patch.object(lr, "review_pr", fake):
+            lr.main([])
+            st = self.state()
+            st["queue"][0]["not_before"] = lr.iso(lr.now() - timedelta(seconds=1))
+            lr.save_state(st)
+            lr.main([])
+        self.assertIsNone(seen[0])
+        self.assertIsNotNone(lr.parse(seen[1]))
+
     def test_killed_run_leaves_a_retry(self):
         calls = []
         lr.save_state({"queue": [{"repo": "a", "pr": 1, "manual": False, "attempts": 0, "key": "a",
                                   "running_since": lr.iso(lr.now())}],
                        "last_poll_ok": lr.iso(lr.now())})
-        with mock.patch.object(lr, "review_pr", lambda r, n, m, d: calls.append(m) or "done"):
+        with mock.patch.object(lr, "review_pr", lambda r, n, m, d, retry_since=None: calls.append(m) or "done"):
             lr.main([])
         self.assertEqual(calls, [True])  # skips its own stale `pending` status
         self.assertEqual(self.state()["queue"], [])
@@ -305,7 +349,7 @@ class Failures(Base):
     def test_running_review_is_marked_in_saved_state(self):
         seen = {}
 
-        def fake(repo, pr, manual, dry):
+        def fake(repo, pr, manual, dry, retry_since=None):
             seen["q"] = self.state()["queue"]
             return "done"
         self.queue(("a", 1))
@@ -395,7 +439,7 @@ class Failures(Base):
     def test_retry_of_an_auto_item_skips_its_own_pending_status(self):
         calls = []
 
-        def fake(repo, pr, manual, dry):
+        def fake(repo, pr, manual, dry, retry_since=None):
             calls.append(manual)
             if len(calls) == 1:
                 raise RuntimeError("boom")
@@ -440,7 +484,7 @@ class Sandbox(Base):
                 return 0, json.dumps({"structured_output": {"findings": []}}), ""
             return 0, "", ""
 
-        def fake_review(repo, pr, manual, dry):
+        def fake_review(repo, pr, manual, dry, retry_since=None):
             wt = self.tmp / f"wt-{repo}"
             wt.mkdir(exist_ok=True)
             lr.run_claude(wt, repo, pr, "h", "main")

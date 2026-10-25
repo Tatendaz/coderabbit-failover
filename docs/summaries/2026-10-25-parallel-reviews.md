@@ -12,7 +12,7 @@
   the main thread alone changes the queue.
 - Added `file_lock()`, a state lock in `save_state()`, per-repo locks, `RateLimited`,
   `claude_limit()`, and a `moved` result from `review_pr()`.
-- Wrote 27 tests. Each one fails against the old logic (checked with a shim that gives the
+- Wrote 29 tests. Each one fails against the old logic (checked with a shim that gives the
   old file the new names).
 
 ## Decisions

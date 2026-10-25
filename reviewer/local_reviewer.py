@@ -463,9 +463,31 @@ def post_results(repo: str, pr: int, head: str, res: dict) -> tuple[str, dict]:
     return state, counts
 
 
-def review_pr(repo: str, pr: int, manual: bool, dry: bool) -> str:
+SUMMARY_RE = re.compile(r"<!-- review-failover head=([0-9a-f]{40}) critical=(\d+) high=(\d+) "
+                        r"medium=(\d+) low=(\d+) -->")
+_me: list[str] = []
+
+
+def posted_summary(repo: str, pr: int, head: str, since: datetime) -> dict | None:
+    """Counts from our own summary comment on `head` posted since `since`, if any. A try
+    that failed after posting it (say, on the final status) must not post a second review."""
+    if not _me:
+        _me.append((gh_json("api", "user") or {}).get("login", ""))
+    pages = gh_json("api", "--paginate", "--slurp",
+                    f"repos/{OWNER}/{repo}/issues/{pr}/comments?since={iso(since)}&per_page=100")
+    for page in pages or []:
+        for c in page:
+            m = SUMMARY_RE.search(c.get("body") or "")
+            if (m and m.group(1) == head and _me[0]
+                    and (c.get("user") or {}).get("login") == _me[0]
+                    and parse(c.get("created_at")) >= since):
+                return dict(zip(("critical", "high", "medium", "low"), map(int, m.groups()[1:])))
+    return None
+
+
+def review_pr(repo: str, pr: int, manual: bool, dry: bool, retry_since: str | None = None) -> str:
     """Returns 'done', 'skip', 'moved' (head changed during the review, so the new head still
-    needs one), or raises on a retryable failure."""
+    needs one), or raises on a retryable failure. `retry_since`: when the failed try began."""
     info = gh_json("pr", "view", str(pr), "--repo", f"{OWNER}/{repo}",
                    "--json", "state,isCrossRepository,headRefOid,baseRefName")
     if info["state"] != "OPEN":
@@ -483,6 +505,14 @@ def review_pr(repo: str, pr: int, manual: bool, dry: bool) -> str:
     if dry:
         log(f"DRY would review {repo}#{pr} head {head[:7]}")
         return "done"
+    if retry_since:
+        counts = posted_summary(repo, pr, head, parse(retry_since))
+        if counts is not None:
+            state = "failure" if counts["critical"] + counts["high"] else "success"
+            set_status(repo, head, state,
+                       " ".join(f"{k}={v}" for k, v in counts.items() if k != "low"), pr)
+            log(f"done {repo}#{pr}: {state} {counts} (summary was already posted)")
+            return "done"
     log(f"review {repo}#{pr} head {head[:7]} (manual={manual})")
     set_status(repo, head, "pending", "Backup review running on the owner's Mac", pr)
     wt = prepare_worktree(repo, pr, head)
@@ -541,8 +571,10 @@ def poll(st: dict, inflight: set) -> None:
 def review_locked(item: dict, dry: bool) -> str:
     # The repo lock also keeps a --once-pr run off a cache clone a worker is using.
     # A retry skips the head-status check: the failed try left its own `pending` there.
+    retry = item.get("retry")
     with file_lock(REPO_LOCKS / f"{item['repo']}.lock"):
-        return review_pr(item["repo"], item["pr"], item["manual"] or item.get("retry", False), dry)
+        return review_pr(item["repo"], item["pr"], item["manual"] or bool(retry), dry,
+                         retry_since=retry if isinstance(retry, str) else None)
 
 
 def give_up(item: dict) -> None:
@@ -561,7 +593,7 @@ def finish(st: dict, item: dict, fut, failed: list) -> None:
     queue: list = st["queue"]
     again = item.pop("again", False)
     again_manual = item.pop("again_manual", False)
-    item.pop("running_since", None)
+    started = item.pop("running_since", None) or iso(now())
     try:
         try:
             result = fut.result()
@@ -573,7 +605,7 @@ def finish(st: dict, item: dict, fut, failed: list) -> None:
             raise
     except RateLimited as e:
         until = limit_wait(item, e.until)
-        item["retry"] = True
+        item["retry"] = item.get("retry") if isinstance(item.get("retry"), str) else started
         item["not_before"] = iso(until)
         cur = parse(st.get("claude_backoff_until"))
         if not cur or until > cur:  # never cut a longer reset short
@@ -584,7 +616,7 @@ def finish(st: dict, item: dict, fut, failed: list) -> None:
         return
     except Exception as e:  # noqa: BLE001 - one bad review must not stop the others
         item["attempts"] = item.get("attempts", 0) + 1
-        item["retry"] = True
+        item["retry"] = item.get("retry") if isinstance(item.get("retry"), str) else started
         item["last_error"] = str(e)[:300]
         item["not_before"] = iso(now() + RETRY_DELAY)
         log(f"FAIL {item['repo']}#{item['pr']} attempt {item['attempts']}: {e}")
@@ -626,8 +658,9 @@ def run_queue(st: dict, dry: bool) -> None:
     next_poll = 0.0
     for item in st["queue"]:
         # Left by a run that was killed mid-review: its `pending` status is its own.
-        if item.pop("running_since", None):
-            item["retry"] = True
+        started = item.pop("running_since", None)
+        if started:
+            item["retry"] = started
     pool = ThreadPoolExecutor(max_workers=CONCURRENCY, thread_name_prefix="review")
     try:
         while True:

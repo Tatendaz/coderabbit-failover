@@ -24,9 +24,10 @@ A `/open-code-review` posted during a batch was not seen until the batch ended.
   24 hours of limits on that PR.
 - A review in flight is marked in state before it starts. A run that was killed mid-review
   leaves the mark, and the next run retries past its own `pending` status.
-- A failed review waits 3 minutes before its next try. All PRs that fail for good in one
+- A failed review waits 3 minutes before its next try. If the failed try already posted its
+  summary, the retry only sets the status from it, so a PR never gets two reviews for one head. All PRs that fail for good in one
   run go out in one phone push.
-- `tests/test_local_reviewer.py`: 27 offline tests, run in the selftest workflow.
+- `tests/test_local_reviewer.py`: 29 offline tests, run in the selftest workflow.
 
 ## Notes
 The read sandbox from #2 is kept: each review's `allowRead` is its own worktree, its own repo

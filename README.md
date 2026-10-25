@@ -80,7 +80,7 @@ Reviews run in parallel, up to `REVIEW_FAILOVER_CONCURRENCY`, but never two in o
 once, because they share that repo's cache clone. While reviews run, the reviewer polls again
 every 2 minutes, so a new trigger is queued without waiting for the batch. If Claude reports
 a usage or rate limit, new reviews wait until the limit resets (15 minutes when it gives no
-time), and that try does not count as a failure. If a PR's head moves during its review, the
+time, 6 hours at most), and that try does not count as a failure. If a PR's head moves during its review, the
 new head is reviewed 3 minutes later.
 
 The reviewing Claude can read only the PR checkout, and run only `ocr delegate`,

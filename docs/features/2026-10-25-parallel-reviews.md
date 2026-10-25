@@ -20,10 +20,11 @@ A `/open-code-review` posted during a batch was not seen until the batch ended.
 - A trigger for a PR under review runs it again when that review ends. A head that moved
   during the review is reviewed 3 minutes later.
 - A Claude usage or rate-limit error pauses new reviews until the reset time (15 minutes if
-  none is given) and does not count as a failed attempt.
+  none is given, 6 hours at most) and does not count as a failed attempt. After 4 limited
+  tries on one PR, the next one counts as a failed attempt.
 - A failed review waits 3 minutes before its next try. All PRs that fail for good in one
   run go out in one phone push.
-- `tests/test_local_reviewer.py`: 19 offline tests, run in the selftest workflow.
+- `tests/test_local_reviewer.py`: 22 offline tests, run in the selftest workflow.
 
 ## Notes
 The read sandbox from #2 is unchanged: each review's `allowRead` is its own worktree, its

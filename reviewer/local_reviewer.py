@@ -64,6 +64,8 @@ MAX_CATCHUP = timedelta(days=7)
 PENDING_STALE = timedelta(minutes=40)
 RETRY_DELAY = timedelta(minutes=3)
 CLAUDE_BACKOFF = timedelta(minutes=15)
+CLAUDE_BACKOFF_MAX = timedelta(hours=6)  # the reset time is parsed from output a PR can sway
+MAX_LIMITED = 4  # rate-limited tries per PR before one counts as a failed attempt
 POLL_EVERY = 120  # seconds between polls while reviews run (launchd interval is 180)
 
 
@@ -334,6 +336,7 @@ def claude_limit(text: str) -> RateLimited | None:
     until = datetime.fromtimestamp(int(m.group(1)), timezone.utc) if m else None
     if not until or until < now():
         until = now() + CLAUDE_BACKOFF
+    until = min(until, now() + CLAUDE_BACKOFF_MAX)
     return RateLimited(f"claude rate-limited: {text.strip()[-200:]}", until)
 
 
@@ -541,7 +544,13 @@ def finish(st: dict, item: dict, fut, failed: list) -> None:
     again = item.pop("again", False)
     again_manual = item.pop("again_manual", False)
     try:
-        result = fut.result()
+        try:
+            result = fut.result()
+        except RateLimited as e:
+            item["limited"] = item.get("limited", 0) + 1
+            if item["limited"] > MAX_LIMITED:  # a limit that never clears is a failure
+                raise RuntimeError(str(e)) from e
+            raise
     except RateLimited as e:
         item["retry"] = True
         item["not_before"] = iso(e.until)

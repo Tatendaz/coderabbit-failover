@@ -271,6 +271,24 @@ class Failures(Base):
         self.assertEqual(rec.calls, [("a", 1, True)])  # b waits for the backoff
         self.notify.assert_not_called()
 
+    def test_claude_limit_backoff_is_capped(self):
+        e = lr.claude_limit("Claude AI usage limit reached|9999999999")
+        self.assertLessEqual(e.until, lr.now() + timedelta(hours=6, seconds=5))
+
+    def test_endless_rate_limits_turn_into_failed_attempts(self):
+        rec = Recorder(delay=0, errors={("a", 1): lr.RateLimited("limit", lr.now() + timedelta(minutes=1))})
+        self.queue(("a", 1))
+        with mock.patch.object(lr, "review_pr", rec):
+            for _ in range(lr.MAX_LIMITED + 1):
+                st = self.state()
+                st.pop("claude_backoff_until", None)
+                st["queue"][0].pop("not_before", None)
+                lr.save_state(st)
+                lr.main([])
+        (item,) = self.state()["queue"]
+        self.assertEqual(item["attempts"], 1)
+        self.assertEqual(item["limited"], lr.MAX_LIMITED + 1)
+
     def test_claude_limit_detection(self):
         epoch = int((datetime.now(timezone.utc) + timedelta(hours=2)).timestamp())
         e = lr.claude_limit(f"Claude AI usage limit reached|{epoch}")

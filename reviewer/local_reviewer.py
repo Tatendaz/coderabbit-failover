@@ -623,7 +623,8 @@ def finish(st: dict, item: dict, fut, failed: list) -> None:
         item["not_before"] = iso(now() + RETRY_DELAY)
         log(f"FAIL {item['repo']}#{item['pr']} attempt {item['attempts']}: {e}")
         if again:
-            item.update(attempts=0, manual=item["manual"] or again_manual)
+            # A new request wants a full review: no reuse of a summary this try posted.
+            item.update(attempts=0, manual=item["manual"] or again_manual, retry=True)
         elif item["attempts"] >= MAX_ATTEMPTS:
             give_up(item)
             failed.append((item, e))

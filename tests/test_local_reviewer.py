@@ -7,6 +7,7 @@ from __future__ import annotations
 import fcntl
 import importlib.util
 import json
+import shutil
 import tempfile
 import threading
 import time
@@ -60,6 +61,7 @@ class Recorder:
 class Base(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp(prefix="rf-test-"))
+        self.addCleanup(shutil.rmtree, self.tmp, True)
         self.patches = [
             mock.patch.object(lr, "OWNER", "o"),
             mock.patch.object(lr, "STATE_FILE", self.tmp / ".state/local.json"),
@@ -337,6 +339,26 @@ class Failures(Base):
             lr.main([])
         self.assertIsNone(seen[0])
         self.assertIsNotNone(lr.parse(seen[1]))
+
+    def test_new_request_during_a_failed_try_gets_a_full_review(self):
+        seen = []
+
+        def fake(repo, pr, manual, dry, retry_since=None):
+            seen.append(retry_since)
+            if len(seen) == 1:
+                self.trigger("a", 1, "c-new")
+                time.sleep(0.4)
+                raise RuntimeError("status failed after the summary was posted")
+            return "done"
+        self.trigger("a", 1, "c-old")
+        with mock.patch.object(lr, "review_pr", fake), mock.patch.object(lr, "POLL_EVERY", 0.1):
+            lr.main([])
+            st = self.state()
+            st["queue"][0]["not_before"] = lr.iso(lr.now() - timedelta(seconds=1))
+            lr.save_state(st)
+            lr.main([])
+        self.assertEqual(len(seen), 2)
+        self.assertIsNone(seen[1])  # no summary reuse: the new request runs a real review
 
     def test_killed_run_leaves_a_retry(self):
         calls = []

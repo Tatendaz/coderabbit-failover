@@ -22,7 +22,7 @@ I use it to let agents merge PRs on their own when CI is green and a real review
 ## How it works
 
 - **One ledger.** `scripts/coderabbit_budget.py` keeps one file, `~/.claude/coderabbit/ledger.json`. `run` checks the budget and books the slot under a file lock, then runs your command. On hold it exits 75 and never runs it. If CodeRabbit answers with a rate-limit message, the slot is given back and the stated wait is recorded for every session.
-- **A reviewer on your Mac.** `reviewer/local_reviewer.py` runs every 3 minutes under launchd. It starts on a CodeRabbit rate-limit comment, or on a `/open-code-review` comment from an owner, member or collaborator. `budget failover` posts that comment, and does not use CodeRabbit budget.
+- **A reviewer on your Mac.** `reviewer/local_reviewer.py` runs every 3 minutes under launchd and reviews up to 3 PRs at once, one per repo. It starts on a CodeRabbit rate-limit comment, or on a `/open-code-review` comment from an owner, member or collaborator. `budget failover` posts that comment, and does not use CodeRabbit budget.
 - **The backup review.** open-code-review in delegation mode with headless Claude Code (Opus 5.5, effort medium) on your subscription, in its own config folder: no user hooks, memory or CLAUDE.md, and the PR's settings, MCP and skills are ignored. Claude only reads the PR. The script posts inline comments, a summary, and a `review-failover` commit status.
 - **Was the head reviewed?** `scripts/coderabbit_status.py` counts a review only if it ran on the current head commit: CodeRabbit's "Review completed" status, a "No actionable comments" comment whose range ends at the head, or `review-failover` success. The green stamp `@coderabbitai ignore` leaves does not count.
 
@@ -48,7 +48,7 @@ First public release, October 2026. No tagged releases yet.
 
 - The backup reviewer is macOS only. It uses launchd and the Keychain. It runs while the Mac is awake and catches up on wake.
 - It covers repos you own that are not archived, not forks, and were pushed this year. Fork PRs are skipped.
-- The ledger and the status script each have an offline `selftest` (49 and 70 checks). The reviewer has `--dry-run` but no automated tests, and the repo has no CI.
+- The ledger and the status script each have an offline `selftest` (49 and 70 checks). The reviewer has `--dry-run` and offline unit tests for its worker pool. CI runs all three on every PR.
 - The backup review is one model's opinion. It catches a lot, not everything.
 - CodeRabbit's limit messages change. If one stops being detected, add it to `RATE_RE`.
 

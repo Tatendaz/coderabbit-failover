@@ -279,9 +279,11 @@ def run_claude(wt: Path, repo: str, pr: int, head: str, base: str) -> dict:
     CLAUDE_HOME.mkdir(parents=True, exist_ok=True)
     # The cache is a blob:none clone and the sandbox has no network, so fetch the blobs both
     # diffs need here, before Claude runs. Run from the cache (no worktree, so no PR
-    # .gitattributes) with no external diff or textconv.
+    # .gitattributes) with no external diff or textconv. --numstat still reads every blob but
+    # prints only counts and quoted paths, so non-UTF-8 file content can't break run()'s decode.
     for rng in ([f"origin/{base}", head], [f"origin/{base}...{head}"]):
-        rc, _, err = run(["git", "-C", str(CACHE / repo), "diff", "--no-ext-diff", "--no-textconv", *rng],
+        rc, _, err = run(["git", "-C", str(CACHE / repo), "diff", "--no-ext-diff", "--no-textconv",
+                          "--numstat", *rng],
                          env={**os.environ, "PATH": PATH}, timeout=900)
         if rc != 0:
             raise RuntimeError(f"blob prefetch failed: {err.strip()[:300]}")

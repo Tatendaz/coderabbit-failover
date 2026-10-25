@@ -40,18 +40,23 @@ would need one Dependabot PR per repo. Those PRs change a workflow file, which `
 cannot merge, so a person would merge each one. The tag lives in this repo, so only people with
 write access here can move it. Third-party actions stay pinned to a sha.
 
-zizmor's `unpinned-uses` audit wants a sha by default. Allow this one ref in the calling repo's
-`.github/zizmor.yml`:
+zizmor's `unpinned-uses` audit wants a sha by default. Allow a tag pin for this one workflow path
+in the calling repo's `.github/zizmor.yml`:
 
 ```yaml
 rules:
   unpinned-uses:
     config:
       policies:
-        "Tatendaz/coderabbit-failover/*": ref-pin
+        "Tatendaz/coderabbit-failover/.github/workflows/reusable-merge-when-clean.yml": ref-pin
 ```
 
-A `uses:` that matches no pattern still falls under zizmor's implicit `"*": hash-pin`.
+Other paths in this repo, and every other `uses:`, still fall under zizmor's implicit
+`"*": hash-pin`.
+
+The tag is a moving ref with write permissions in every caller. Anyone who can move it changes
+what runs in all of them. Only the owner can push to this repo. A tag ruleset that blocks
+updates and deletes of `merge-when-clean-v*` for everyone but the owner would make that explicit.
 
 ## Release a fix
 

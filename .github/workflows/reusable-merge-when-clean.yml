@@ -17,7 +17,7 @@ name: Merge when clean (reusable)
 # `security/` branch or labelled `automerge`. Other PRs are left to the owner and
 # to Claude sessions working under the merge-when-clean rule. Skips drafts, forks, Night Shift PRs,
 # PRs labelled `needs-owner` / `do-not-merge`, and PRs that touch database rules,
-# migrations, infra, the caller or this file, or a path listed in the repo's optional
+# migrations, infra, the caller or this file, the zizmor config, or a path listed in the repo's optional
 # `.github/merge-hold-paths` (one regex per line, read from the default branch).
 # Owner decision 2026-10-25. Logic = template v7; tests in tests/merge_when_clean/test_merge_when_clean.py.
 #
@@ -128,7 +128,7 @@ jobs:
             fi
             # No pipes into grep -q: under pipefail an early grep exit can turn a match into a failure.
             paths=$(tr '\t' '\n' <<<"$files")
-            grep -Eq '(^|/)(firestore\.rules|storage\.rules|database\.rules\.json)$|(^|/)migrations/|(^|/)terraform/|\.tf$|^\.github/workflows/(reusable-)?merge-when-clean\.yml$|^\.github/merge-hold-paths$' <<<"$paths"; rc=$?
+            grep -Eq '(^|/)(firestore\.rules|storage\.rules|database\.rules\.json)$|(^|/)migrations/|(^|/)terraform/|\.tf$|^\.github/workflows/(reusable-)?merge-when-clean\.yml$|^\.github/merge-hold-paths$|^(\.github/)?zizmor\.ya?ml$' <<<"$paths"; rc=$?
             if [ "$rc" != 1 ]; then echo "#$pr: skip (touches files the owner merges, or the check failed: $rc)"; return; fi
             if [ -n "$hold" ]; then
               grep -Eq -f <(printf '%s\n' "$hold") <<<"$paths"; rc=$?

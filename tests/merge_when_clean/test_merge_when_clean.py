@@ -333,6 +333,14 @@ def protected_path_skipped(run):
         assert_not_merged(r, says="#5: skip (touches files the owner merges")
 
 
+@case('|^(\\.github/)?zizmor\\.ya?ml$', '')
+def zizmor_config_skipped(run):
+    # It holds the one exception to sha pinning, so a PR must not loosen it on its own.
+    for path in [".github/zizmor.yml", ".github/zizmor.yaml", "zizmor.yml"]:
+        r = run([make_pr(5, files=[[path, ""]])])
+        assert_not_merged(r, says="#5: skip (touches files the owner merges")
+
+
 @case('workflows/(reusable-)?merge', 'workflows/merge')
 def reusable_workflow_path_skipped(run):
     r = run([make_pr(5, files=[[".github/workflows/reusable-merge-when-clean.yml", ""]])])
@@ -588,11 +596,15 @@ def test_workflow_is_reusable_and_pins_nothing_from_the_caller():
 
 
 def test_script_matches_template_v7_except_known_changes():
-    """The logic is template v7; only the own-check filter and the protected path list changed."""
+    """The logic is template v7; only the own-check filter and the protected path list changed.
+
+    v1.0.1 added the zizmor config to the protected paths."""
     template = HERE / "fixtures/merge-when-clean-v7.yml"
     v7 = extract_script(template.read_text())
     v7 = v7.replace('select(.name!="Merge when clean")',
                     'select(.name!="Merge when clean" and (.name | endswith(" / Merge when clean") | not))')
     v7 = v7.replace(r'^\.github/workflows/merge-when-clean\.yml$|',
                     r'^\.github/workflows/(reusable-)?merge-when-clean\.yml$|')
+    v7 = v7.replace(r'|^\.github/merge-hold-paths$' + "'",
+                    r'|^\.github/merge-hold-paths$|^(\.github/)?zizmor\.ya?ml$' + "'")
     assert v7 == SCRIPT

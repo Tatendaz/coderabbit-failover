@@ -33,5 +33,9 @@ jobs:
           python -m pip install --quiet --disable-pip-version-check \
             --only-binary=:all: --require-hashes -r .github/zizmor-requirements.txt
 
+      # The read-only token turns on zizmor's online audits (impostor commits,
+      # known-vulnerable actions). --strict-collection fails on a workflow it can't parse.
       - name: Scan workflows
-        run: zizmor --min-severity high .github/workflows
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: zizmor --strict-collection --min-severity high .github/workflows

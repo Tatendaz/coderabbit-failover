@@ -278,9 +278,11 @@ def run_claude(wt: Path, repo: str, pr: int, head: str, base: str) -> dict:
         raise RuntimeError(f"no Keychain item '{KC_SERVICE}'")
     CLAUDE_HOME.mkdir(parents=True, exist_ok=True)
     # The cache is a blob:none clone and the sandbox has no network, so fetch the blobs both
-    # diffs need here, before Claude runs.
+    # diffs need here, before Claude runs. Run from the cache (no worktree, so no PR
+    # .gitattributes) with no external diff or textconv.
     for rng in ([f"origin/{base}", head], [f"origin/{base}...{head}"]):
-        rc, _, err = run(["git", "diff", *rng], cwd=wt, env={**os.environ, "PATH": PATH}, timeout=900)
+        rc, _, err = run(["git", "-C", str(CACHE / repo), "diff", "--no-ext-diff", "--no-textconv", *rng],
+                         env={**os.environ, "PATH": PATH}, timeout=900)
         if rc != 0:
             raise RuntimeError(f"blob prefetch failed: {err.strip()[:300]}")
     # GIT_CONFIG_GLOBAL: the sandbox below hides ~/.gitconfig, and git exits if it can't read it.
@@ -291,7 +293,8 @@ def run_claude(wt: Path, repo: str, pr: int, head: str, base: str) -> dict:
     # Read/Grep/Glob; the OS sandbox covers git and ocr, which take paths of their own
     # (`git diff ~/.ssh/id_ed25519 /dev/null` reads outside the repo without --no-index).
     sandbox = {"sandbox": {"enabled": True, "allowUnsandboxedCommands": False, "filesystem": {
-        "denyRead": ["~/"], "allowRead": [str(wt), str(CACHE), str(OCR_BIN_DIR.parent.parent)]}}}
+        "denyRead": ["~/", "/Volumes/"],
+        "allowRead": [str(wt), str(CACHE / repo), str(OCR_BIN_DIR.parent.parent)]}}}
     tools = ",".join([
         "Read(./**)", "Grep(./**)", "Glob(./**)",
         "Bash(ocr delegate preview:*)", "Bash(ocr delegate rule:*)",

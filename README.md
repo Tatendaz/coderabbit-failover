@@ -76,7 +76,7 @@ It runs only while the Mac is awake, and catches up on wake.
 
 The reviewing Claude can read only the PR checkout, and run only `ocr delegate`,
 `git diff`, `git show` and `git log`. Those commands run in Claude Code's sandbox: no
-network, and no reads in your home folder except the repo cache and `.tools`. Symlinks
+network, and no reads in your home folder except this repo's cache clone and `.tools`. Symlinks
 in the PR are checked out as plain files. Its findings are posted publicly, so a prompt
 hidden in PR code must not reach other files on the Mac.
 

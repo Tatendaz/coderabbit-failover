@@ -2,6 +2,7 @@ name: Self-tests
 
 # Offline logic checks for the budget ledger, the review-status probe, and the backup
 # reviewer's worker pool. All use only the Python standard library and touch no network.
+# The reusable merge-when-clean workflow's tests use pytest (pinned by hash) and a fake `gh`.
 on:
   push:
     branches: [main]
@@ -29,3 +30,31 @@ jobs:
         run: python3 scripts/coderabbit_status.py --selftest
       - name: Backup reviewer tests
         run: python3 -m unittest discover -s tests -v
+
+  merge-when-clean:
+    name: merge-when-clean tests (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: '3.12'
+      - name: Install pytest (pinned by hash)
+        run: python -m pip install --quiet --disable-pip-version-check --require-hashes -r tests/merge_when_clean/requirements.txt
+      - name: Reusable merge-when-clean tests
+        run: python -m pytest tests/merge_when_clean -v -p no:cacheprovider
+      # Self-hosted Mac runners may run the job with the system bash 3.2.
+      - name: Same tests with /bin/bash
+        if: runner.os == 'macOS'
+        env:
+          MWC_BASH: /bin/bash
+        run: python -m pytest tests/merge_when_clean -q -p no:cacheprovider

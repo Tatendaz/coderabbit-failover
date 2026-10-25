@@ -21,6 +21,8 @@ on the head commit.
 | `reviewer/local_reviewer.py` | The backup reviewer. |
 | `tests/test_local_reviewer.py` | Offline tests for the reviewer's worker pool, locks and backoff. |
 | `launchd/review-failover.plist.template` | Runs the reviewer every 3 minutes. |
+| `.github/workflows/reusable-merge-when-clean.yml` | Shared job that merges a PR once it is clean. |
+| `tests/merge_when_clean/test_merge_when_clean.py` | Runs that job's script against a fake `gh`. |
 
 ## Install the skill
 
@@ -96,6 +98,12 @@ hidden in PR code must not reach other files on the Mac.
 | `success` | No critical or high findings. |
 | `failure` | Critical or high findings. Fix and push. |
 | `error` | Failed 3 times. Comment `/open-code-review` to retry. |
+
+## Merge when clean (reusable workflow)
+
+Repos call `.github/workflows/reusable-merge-when-clean.yml` at the tag `merge-when-clean-v1`. It merges
+a PR once CI is green, a real review ran on the head and no thread is open. Caller example,
+release steps and tests: [docs/merge-when-clean.md](docs/merge-when-clean.md).
 
 ## Limits
 

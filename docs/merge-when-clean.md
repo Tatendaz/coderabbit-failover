@@ -27,7 +27,7 @@ jobs:
 
 The file's header lists what it merges and what it skips. An optional
 `.github/merge-hold-paths` (one regex per line) holds more paths for the owner.
-Run the tests with `pip install --require-hashes -r tests/requirements.txt && python -m pytest tests`.
+Run the tests with `pip install --require-hashes -r tests/merge_when_clean/requirements.txt && python -m pytest tests/merge_when_clean`.
 
 The tests run in the `Self-tests` workflow on Ubuntu and macOS. Each case also has a mutant, a
 small break in the script, and `test_case_catches_mutant` checks that the case fails on it.

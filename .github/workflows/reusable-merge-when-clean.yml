@@ -17,7 +17,7 @@ name: Merge when clean (reusable)
 # PRs labelled `needs-owner` / `do-not-merge`, and PRs that touch database rules,
 # migrations, infra, the caller or this file, or a path listed in the repo's optional
 # `.github/merge-hold-paths` (one regex per line, read from the default branch).
-# Owner decision 2026-10-25. Logic = template v7; tests in tests/test_merge_when_clean.py.
+# Owner decision 2026-10-25. Logic = template v7; tests in tests/merge_when_clean/test_merge_when_clean.py.
 #
 # The caller sets the triggers, the token permissions (contents/pull-requests write,
 # checks/statuses read) and the `status` success `if`. It must not set a concurrency group

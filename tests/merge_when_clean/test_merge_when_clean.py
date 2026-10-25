@@ -1,6 +1,6 @@
 """Tests for .github/workflows/reusable-merge-when-clean.yml.
 
-Each case pulls the `run:` script out of the workflow, puts a fake `gh` (tests/fake_gh.py)
+Each case pulls the `run:` script out of the workflow, puts a fake `gh` (fake_gh.py)
 first on PATH, and runs the script the way GitHub runs `shell: bash`:
 `bash --noprofile --norc -e -o pipefail`. Set MWC_BASH to try another bash.
 
@@ -15,9 +15,10 @@ from pathlib import Path
 
 import pytest
 
-ROOT = Path(__file__).resolve().parent.parent
+HERE = Path(__file__).resolve().parent
+ROOT = HERE.parent.parent
 WORKFLOW = ROOT / ".github/workflows/reusable-merge-when-clean.yml"
-FAKE_GH = ROOT / "tests/fake_gh.py"
+FAKE_GH = HERE / "fake_gh.py"
 REPO = "Tatendaz/demo"
 OWNER = "Tatendaz"
 
@@ -578,7 +579,7 @@ def test_workflow_is_reusable_and_pins_nothing_from_the_caller():
 
 def test_script_matches_template_v7_except_known_changes():
     """The logic is template v7; only the own-check filter and the protected path list changed."""
-    template = ROOT / "tests/fixtures/merge-when-clean-v7.yml"
+    template = HERE / "fixtures/merge-when-clean-v7.yml"
     v7 = extract_script(template.read_text())
     v7 = v7.replace('select(.name!="Merge when clean")',
                     'select(.name!="Merge when clean" and (.name | endswith(" / Merge when clean") | not))')

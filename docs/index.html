@@ -189,7 +189,7 @@
       </div>
       <div class="how-row">
         <h3>A reviewer on your Mac</h3>
-        <p><code>reviewer/local_reviewer.py</code> runs every 3 minutes under launchd. It starts on a CodeRabbit rate-limit comment, or on a <code>/open-code-review</code> comment from an owner, member or collaborator. <code>budget failover</code> posts that comment, and does not use CodeRabbit budget.</p>
+        <p><code>reviewer/local_reviewer.py</code> runs every 3 minutes under launchd and reviews up to 3 PRs at once, one per repo. It starts on a CodeRabbit rate-limit comment, or on a <code>/open-code-review</code> comment from an owner, member or collaborator. <code>budget failover</code> posts that comment, and does not use CodeRabbit budget.</p>
       </div>
       <div class="how-row">
         <h3>The backup review</h3>
@@ -246,7 +246,8 @@ REVIEW_FAILOVER_OWNER=&lt;your-github-user&gt; python3 reviewer/local_reviewer.p
         <tr><th scope="row"><code>REVIEW_FAILOVER_OWNER</code></th><td class="def">(required)</td><td>GitHub user or org to watch.</td></tr>
         <tr><th scope="row"><code>REVIEW_FAILOVER_HOME</code></th><td class="def"><code>~/.review-failover</code></td><td>State, cache, tools.</td></tr>
         <tr><th scope="row"><code>REVIEW_FAILOVER_KEYCHAIN</code></th><td class="def"><code>claude-code-oauth-token</code></td><td>Keychain item with the token.</td></tr>
-        <tr><th scope="row"><code>REVIEW_FAILOVER_NOTIFY</code></th><td class="def">none</td><td>A command that takes one message, called after 3 failed tries.</td></tr>
+        <tr><th scope="row"><code>REVIEW_FAILOVER_NOTIFY</code></th><td class="def">none</td><td>A command that takes one message. Called once per run for the PRs that failed 3 tries (it names the first few, then "+N more").</td></tr>
+        <tr><th scope="row"><code>REVIEW_FAILOVER_CONCURRENCY</code></th><td class="def">3</td><td>Reviews that run at the same time (1 to 8). One per repo at a time.</td></tr>
         <tr><th scope="row"><code>CODERABBIT_LEDGER_DIR</code></th><td class="def"><code>~/.claude/coderabbit</code></td><td>Where the ledger lives.</td></tr>
       </tbody>
     </table>
@@ -261,7 +262,7 @@ REVIEW_FAILOVER_OWNER=&lt;your-github-user&gt; python3 reviewer/local_reviewer.p
     <ul class="limits" style="margin-top:22px">
       <li>The backup reviewer is macOS only. It uses launchd and the Keychain. <span>It runs while the Mac is awake and catches up on wake.</span></li>
       <li>It covers repos you own that are not archived, not forks, and were pushed this year. <span>Fork PRs are skipped.</span></li>
-      <li>The ledger and the status script each have an offline <code>selftest</code> (49 and 70 checks). <span>The reviewer has <code>--dry-run</code> but no automated tests, and the repo has no CI.</span></li>
+      <li>The ledger and the status script each have an offline <code>selftest</code> (49 and 70 checks). <span>The reviewer has <code>--dry-run</code> and offline unit tests for its worker pool. CI runs all three on every PR.</span></li>
       <li>The backup review is one model's opinion. <span>It catches a lot, not everything.</span></li>
       <li>CodeRabbit's limit messages change. <span>If one stops being detected, add it to <code>RATE_RE</code>.</span></li>
     </ul>

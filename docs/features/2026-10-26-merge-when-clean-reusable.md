@@ -5,7 +5,7 @@
 
 ## Summary
 Add `.github/workflows/reusable-merge-when-clean.yml`, a `workflow_call` version of the
-merge-when-clean job (template v7), and `tests/test_merge_when_clean.py`, which runs its
+merge-when-clean job (template v7), and `tests/merge_when_clean/test_merge_when_clean.py`, which runs its
 script against a fake `gh` in CI.
 
 ## Why

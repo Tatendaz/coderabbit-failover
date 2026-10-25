@@ -10,9 +10,9 @@
 ## Steps
 - Built the reusable workflow from template v7 (sha256 `a5520977…`). Only the own-check filter
   and the protected path list changed; a test checks that.
-- Wrote `tests/fake_gh.py` and `tests/test_merge_when_clean.py`. Each case runs the extracted
+- Wrote `tests/merge_when_clean/fake_gh.py` and `tests/merge_when_clean/test_merge_when_clean.py`. Each case runs the extracted
   script with `bash --noprofile --norc -e -o pipefail`, and each has a mutant it must catch.
-- Pinned pytest by hash in `tests/requirements.txt` and added a CI job to `selftest.yml`.
+- Pinned pytest by hash in `tests/merge_when_clean/requirements.txt` and added a CI job to `selftest.yml`.
 - actionlint and zizmor (strict, online) clean.
 
 ## Decisions

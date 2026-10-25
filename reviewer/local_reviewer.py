@@ -11,7 +11,10 @@ Every run (launchd, every 3 minutes, and once at login/wake):
      good poll. The window covers any time the Mac was asleep or off.
   2. Triggers: a coderabbitai[bot] comment that says it is rate-limited, or a comment that
      starts with "/open-code-review" from OWNER/MEMBER/COLLABORATOR (always re-reviews).
-  3. For each triggered PR (same-repo only, open), reviews the current head:
+  3. Reviews the triggered PRs (same-repo only, open) from a small worker pool
+     (REVIEW_FAILOVER_CONCURRENCY, default 3), at most one review per repo at a time.
+     While reviews run it polls again every 2 minutes and saves new triggers at once.
+     For each PR it reviews the current head:
      open-code-review delegation mode + headless Claude Code (Opus 5.5, effort medium) on
      the owner's subscription, in an isolated config dir (no user hooks, memory, or
      CLAUDE.md; project settings, MCP, and skills from the PR are ignored).
@@ -19,8 +22,9 @@ Every run (launchd, every 3 minutes, and once at login/wake):
   4. Posts one PR review with inline comments, a summary comment with the
      `<!-- review-failover head=... -->` marker, and a `review-failover` commit status
      (success = no critical/high findings), exactly like the GitHub workflow.
-  5. A failed review is retried on the next runs (3 attempts), then marked `error`
-     and pushed to the phone.
+  5. A failed review is retried after 3 minutes (3 attempts), then marked `error`.
+     All PRs that fail for good in one run go to the phone in one push. A Claude
+     rate-limit error pauses new reviews and does not count as an attempt.
 
 Usage: local_reviewer.py [--once-pr OWNER/REPO#N] [--dry-run]
 """
@@ -34,6 +38,10 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
+import time
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -41,7 +49,12 @@ OWNER = os.environ.get("REVIEW_FAILOVER_OWNER", "")
 BASE = Path(os.environ.get("REVIEW_FAILOVER_HOME", Path.home() / ".review-failover"))
 STATE_FILE = BASE / ".state/local.json"
 LOCK_FILE = BASE / ".state/local.lock"
+STATE_LOCK = BASE / ".state/state.lock"
+REPO_LOCKS = BASE / ".state/repo-locks"
 CACHE = BASE / ".cache/repos"
+# Worktrees live under BASE, not in $TMPDIR: the sandbox blocks reads in ~/, so a review
+# can't read another review's worktree. Only its own is opened again in allowRead.
+WORKTREES = BASE / ".worktrees"
 CLAUDE_HOME = BASE / ".claude-home"
 OCR_BIN_DIR = BASE / ".tools/node_modules/.bin"
 # Optional: a command that takes one message argument (e.g. an ntfy/Pushover wrapper).
@@ -52,6 +65,22 @@ EFFORT = "medium"
 MAX_ATTEMPTS = 3
 MAX_CATCHUP = timedelta(days=7)
 PENDING_STALE = timedelta(minutes=40)
+RETRY_DELAY = timedelta(minutes=3)
+CLAUDE_BACKOFF = timedelta(minutes=15)
+CLAUDE_BACKOFF_MAX = timedelta(hours=6)  # the reset time is parsed from output a PR can sway
+LIMITED_GIVE_UP = timedelta(hours=24)  # after this long rate-limited, a try counts as failed
+POLL_EVERY = 120  # seconds between polls while reviews run (launchd interval is 180)
+
+
+def _concurrency() -> int:
+    try:
+        n = int(os.environ.get("REVIEW_FAILOVER_CONCURRENCY", "3"))
+    except ValueError:
+        n = 3
+    return max(1, min(n, 8))
+
+
+CONCURRENCY = _concurrency()
 PATH = f"{OCR_BIN_DIR}:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:{Path.home()}/.local/bin"
 
 RATE_RE = re.compile(
@@ -62,6 +91,17 @@ RATE_RE = re.compile(
     re.IGNORECASE,
 )
 TRUSTED = {"OWNER", "MEMBER", "COLLABORATOR"}
+# Claude Code's own limit errors: "Claude AI usage limit reached|<epoch>", "You've hit your
+# limit", API 429 rate_limit_error. Checked only on error output, never on a review result.
+CLAUDE_LIMIT_RE = re.compile(r"usage\s+limit|rate[\s_-]*limit|hit\s+your\s+limit", re.IGNORECASE)
+
+
+class RateLimited(RuntimeError):
+    """Claude refused for quota. Retry after `until` (None: back off); not a failed attempt."""
+
+    def __init__(self, msg: str, until: datetime | None = None):
+        super().__init__(msg)
+        self.until = until
 
 SCHEMA = {
     "type": "object",
@@ -139,8 +179,12 @@ def parse(ts: str | None) -> datetime | None:
     return datetime.fromisoformat(ts.replace("Z", "+00:00"))
 
 
+_log_mu = threading.Lock()
+
+
 def log(msg: str) -> None:
-    print(f"{iso(now())} {msg}", flush=True)
+    with _log_mu:
+        print(f"{iso(now())} {msg}", flush=True)
 
 
 def run(cmd: list[str], cwd: str | Path | None = None, env: dict | None = None,
@@ -174,11 +218,27 @@ def load_state() -> dict:
         return {}
 
 
+@contextmanager
+def file_lock(path: Path):
+    """Exclusive flock. Each call opens its own file, so it also excludes other threads."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "a") as fh:
+        fcntl.flock(fh, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(fh, fcntl.LOCK_UN)
+
+
+_state_mu = threading.Lock()
+
+
 def save_state(st: dict) -> None:
     STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-    tmp = STATE_FILE.with_suffix(".tmp")
-    tmp.write_text(json.dumps(st, indent=2))
-    tmp.replace(STATE_FILE)
+    with _state_mu, file_lock(STATE_LOCK):
+        tmp = STATE_FILE.with_suffix(".tmp")
+        tmp.write_text(json.dumps(st, indent=2))
+        tmp.replace(STATE_FILE)
 
 
 # --- discovery -----------------------------------------------------------------------
@@ -242,7 +302,12 @@ def head_status(repo: str, sha: str) -> tuple[str | None, datetime | None]:
 
 
 def prepare_worktree(repo: str, pr: int, head: str) -> Path:
+    """Caller holds the repo lock, so any worktree left in WORKTREES/<repo> is stale."""
     CACHE.mkdir(parents=True, exist_ok=True)
+    wroot = WORKTREES / repo
+    if wroot.is_dir():
+        for old in wroot.iterdir():  # left by a killed run
+            shutil.rmtree(old, ignore_errors=True)
     rdir = CACHE / repo
     env = {**os.environ, "PATH": PATH}
     if not (rdir / ".git").exists():
@@ -256,7 +321,8 @@ def prepare_worktree(repo: str, pr: int, head: str) -> Path:
         if rc != 0:
             raise RuntimeError(f"git {args[0]} failed: {err.strip()[:300]}")
     run(["git", "-C", str(rdir), "worktree", "prune"], env=env)
-    wt = Path(tempfile.mkdtemp(prefix=f"rf-{repo}-{pr}-"))
+    wroot.mkdir(parents=True, exist_ok=True)
+    wt = Path(tempfile.mkdtemp(prefix=f"rf-{pr}-", dir=wroot))
     # core.symlinks=false: a link in the PR is checked out as a text file, so it can't point
     # the reviewer at a file outside the worktree.
     rc, _, err = run(["git", "-C", str(rdir), "-c", "core.symlinks=false", "worktree", "add",
@@ -270,6 +336,26 @@ def prepare_worktree(repo: str, pr: int, head: str) -> Path:
 def drop_worktree(repo: str, wt: Path) -> None:
     run(["git", "-C", str(CACHE / repo), "worktree", "remove", "--force", str(wt)])
     shutil.rmtree(wt, ignore_errors=True)
+
+
+def claude_limit(text: str) -> RateLimited | None:
+    if not CLAUDE_LIMIT_RE.search(text or ""):
+        return None
+    m = re.search(r"\|(\d{10})\b", text)
+    until = datetime.fromtimestamp(int(m.group(1)), timezone.utc) if m else None
+    if until and until < now():
+        until = None
+    if until:
+        until = min(until, now() + CLAUDE_BACKOFF_MAX)
+    return RateLimited(f"claude rate-limited: {text.strip()[-200:]}", until)
+
+
+def limit_wait(item: dict, until: datetime | None) -> datetime:
+    """The stated reset time, or 15 min doubling per limited try, at most 6 hours."""
+    if until:
+        return until
+    step = CLAUDE_BACKOFF * 2 ** min(item.get("limited", 1) - 1, 6)
+    return now() + min(step, CLAUDE_BACKOFF_MAX)
 
 
 def run_claude(wt: Path, repo: str, pr: int, head: str, base: str) -> dict:
@@ -314,9 +400,14 @@ def run_claude(wt: Path, repo: str, pr: int, head: str, base: str) -> dict:
     try:
         data = json.loads(out)
     except ValueError:
-        raise RuntimeError(f"claude rc={rc}: {(err or out).strip()[-300:]}")
+        raise claude_limit(f"{err}\n{out}") or RuntimeError(f"claude rc={rc}: {(err or out).strip()[-300:]}")
     if data.get("is_error") or not isinstance(data.get("structured_output"), dict):
-        raise RuntimeError(f"claude error: {str(data.get('result') or data.get('subtype'))[:300]}")
+        msg = str(data.get("result") or data.get("subtype"))
+        if data.get("is_error"):
+            limited = claude_limit(msg)
+            if limited:
+                raise limited
+        raise RuntimeError(f"claude error: {msg[:300]}")
     return data["structured_output"]
 
 
@@ -372,8 +463,33 @@ def post_results(repo: str, pr: int, head: str, res: dict) -> tuple[str, dict]:
     return state, counts
 
 
-def review_pr(repo: str, pr: int, manual: bool, dry: bool) -> str:
-    """Returns 'done', 'skip', or raises on a retryable failure."""
+SUMMARY_RE = re.compile(r"<!-- review-failover head=([0-9a-f]{40}) critical=(\d+) high=(\d+) "
+                        r"medium=(\d+) low=(\d+) -->")
+_me: list[str] = []
+
+
+def posted_summary(repo: str, pr: int, head: str, since: datetime) -> dict | None:
+    """Counts from our own summary comment on `head` posted since `since`, if any. A try
+    that failed after posting it (say, on the final status) must not post a second review."""
+    if not _me:
+        _me.append((gh_json("api", "user") or {}).get("login", ""))
+    pages = gh_json("api", "--paginate", "--slurp",
+                    f"repos/{OWNER}/{repo}/issues/{pr}/comments?since={iso(since)}&per_page=100")
+    for page in pages or []:
+        for c in page:
+            # Only the last line: the body above it holds model text, which could fake a marker.
+            lines = (c.get("body") or "").rstrip().splitlines()
+            m = SUMMARY_RE.fullmatch(lines[-1].strip()) if lines else None
+            if (m and m.group(1) == head and _me[0]
+                    and (c.get("user") or {}).get("login") == _me[0]
+                    and parse(c.get("created_at")) >= since):
+                return dict(zip(("critical", "high", "medium", "low"), map(int, m.groups()[1:])))
+    return None
+
+
+def review_pr(repo: str, pr: int, manual: bool, dry: bool, retry_since: str | None = None) -> str:
+    """Returns 'done', 'skip', 'moved' (head changed during the review, so the new head still
+    needs one), or raises on a retryable failure. `retry_since`: when the failed try began."""
     info = gh_json("pr", "view", str(pr), "--repo", f"{OWNER}/{repo}",
                    "--json", "state,isCrossRepository,headRefOid,baseRefName")
     if info["state"] != "OPEN":
@@ -391,6 +507,14 @@ def review_pr(repo: str, pr: int, manual: bool, dry: bool) -> str:
     if dry:
         log(f"DRY would review {repo}#{pr} head {head[:7]}")
         return "done"
+    if retry_since:
+        counts = posted_summary(repo, pr, head, parse(retry_since))
+        if counts is not None:
+            state = "failure" if counts["critical"] + counts["high"] else "success"
+            set_status(repo, head, state,
+                       " ".join(f"{k}={v}" for k, v in counts.items() if k != "low"), pr)
+            log(f"done {repo}#{pr}: {state} {counts} (summary was already posted)")
+            return "done"
     log(f"review {repo}#{pr} head {head[:7]} (manual={manual})")
     set_status(repo, head, "pending", "Backup review running on the owner's Mac", pr)
     wt = prepare_worktree(repo, pr, head)
@@ -401,45 +525,27 @@ def review_pr(repo: str, pr: int, manual: bool, dry: bool) -> str:
     state, counts = post_results(repo, pr, head, res)
     set_status(repo, head, state, " ".join(f"{k}={v}" for k, v in counts.items() if k != "low"), pr)
     log(f"done {repo}#{pr}: {state} {counts}")
+    try:
+        now_head = gh_json("pr", "view", str(pr), "--repo", f"{OWNER}/{repo}",
+                           "--json", "headRefOid")["headRefOid"]
+    except (RuntimeError, KeyError, TypeError):
+        return "done"
+    if now_head != head:
+        log(f"moved {repo}#{pr}: head is now {now_head[:7]}, queued again")
+        return "moved"
     return "done"
 
 
 # --- main loop -----------------------------------------------------------------------
 
-def main() -> int:
-    if not OWNER:
-        log("set REVIEW_FAILOVER_OWNER to your GitHub user or org")
-        return 2
-    dry = "--dry-run" in sys.argv
-    once = None
-    if "--once-pr" in sys.argv:
-        spec = sys.argv[sys.argv.index("--once-pr") + 1]
-        r, n = spec.split("#")
-        once = (r.split("/")[-1], int(n))
-
-    LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
-    lock = open(LOCK_FILE, "w")
-    try:
-        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except BlockingIOError:
-        log("another run is active; exit")
-        return 0
-
-    st = load_state()
-    if once:
-        try:
-            review_pr(once[0], once[1], True, dry)
-            return 0
-        except RuntimeError as e:
-            log(f"FAIL {once[0]}#{once[1]}: {e}")
-            return 1
-
+def poll(st: dict, inflight: set) -> None:
+    """Find new triggers and add them to the queue. A trigger for a PR under review now
+    marks it to run again when that review ends."""
     started = now()
     last = parse(st.get("last_poll_ok")) or (started - timedelta(hours=24))
     since = max(last - timedelta(minutes=10), started - MAX_CATCHUP)
     seen: dict = st.setdefault("seen", {})
     queue: list = st.setdefault("queue", [])
-
     try:
         repos = sorted(active_repos(st) & repos_with_open_prs())
         for repo in repos:
@@ -448,39 +554,212 @@ def main() -> int:
                     continue
                 seen[t["key"]] = iso(started)
                 q = next((x for x in queue if x["repo"] == t["repo"] and x["pr"] == t["pr"]), None)
-                if q:
+                if q and id(q) in inflight:
+                    q["again"] = True
+                    q["again_manual"] = q.get("again_manual", False) or t["manual"]
+                    log(f"queued {t['repo']}#{t['pr']} again (review running)")
+                elif q:
                     q["manual"] = q["manual"] or t["manual"]
+                    if t["manual"] and q.get("retry"):
+                        # A new request on a failed item: fresh tries, a full review now.
+                        q.update(attempts=0, retry=True)
+                        q.pop("not_before", None)
                 else:
                     queue.append({**t, "attempts": 0, "queued_at": iso(started)})
+                    log(f"queued {t['repo']}#{t['pr']} (manual={t['manual']})")
         st["last_poll_ok"] = iso(started)
-    except RuntimeError as e:
+    except (RuntimeError, KeyError, TypeError, ValueError) as e:
         log(f"poll failed (will catch up next run): {e}")
-
-    keep = []
-    for item in queue:
-        try:
-            review_pr(item["repo"], item["pr"], item["manual"], dry)
-        except RuntimeError as e:
-            item["attempts"] += 1
-            item["last_error"] = str(e)[:300]
-            log(f"FAIL {item['repo']}#{item['pr']} attempt {item['attempts']}: {e}")
-            if item["attempts"] < MAX_ATTEMPTS:
-                keep.append(item)
-            else:
-                try:
-                    info = gh_json("pr", "view", str(item["pr"]), "--repo",
-                                   f"{OWNER}/{item['repo']}", "--json", "headRefOid")
-                    set_status(item["repo"], info["headRefOid"], "error",
-                               "Local backup review failed 3 times. Comment /open-code-review to retry.",
-                               item["pr"])
-                except RuntimeError:
-                    pass
-                notify(f"Backup review failed 3x on {item['repo']}#{item['pr']}: {str(e)[:100]}")
-    st["queue"] = keep if not dry else queue
     cutoff = started - timedelta(days=14)
     st["seen"] = {k: v for k, v in seen.items() if (parse(v) or started) > cutoff}
-    if not dry:
-        save_state(st)
+
+
+def review_locked(item: dict, dry: bool) -> str:
+    # The repo lock also keeps a --once-pr run off a cache clone a worker is using.
+    # A retry skips the head-status check: the failed try left its own `pending` there.
+    retry = item.get("retry")
+    with file_lock(REPO_LOCKS / f"{item['repo']}.lock"):
+        return review_pr(item["repo"], item["pr"], item["manual"] or bool(retry), dry,
+                         retry_since=retry if isinstance(retry, str) else None)
+
+
+def give_up(item: dict) -> None:
+    try:
+        info = gh_json("pr", "view", str(item["pr"]), "--repo",
+                       f"{OWNER}/{item['repo']}", "--json", "headRefOid")
+        set_status(item["repo"], info["headRefOid"], "error",
+                   "Local backup review failed 3 times. Comment /open-code-review to retry.",
+                   item["pr"])
+    except Exception:  # noqa: BLE001 - best effort; the push still goes out
+        pass
+
+
+def finish(st: dict, item: dict, fut, failed: list) -> None:
+    """Apply one finished review to the queue. Runs on the main thread only."""
+    queue: list = st["queue"]
+    again = item.pop("again", False)
+    again_manual = item.pop("again_manual", False)
+    started = item.pop("running_since", None) or iso(now())
+    try:
+        try:
+            result = fut.result()
+        except RateLimited as e:
+            item["limited"] = item.get("limited", 0) + 1
+            item.setdefault("limited_since", iso(now()))
+            if now() - parse(item["limited_since"]) > LIMITED_GIVE_UP:  # it never clears
+                raise RuntimeError(str(e)) from e
+            raise
+    except RateLimited as e:
+        until = limit_wait(item, e.until)
+        item["retry"] = item.get("retry") if isinstance(item.get("retry"), str) else started
+        item["not_before"] = iso(until)
+        cur = parse(st.get("claude_backoff_until"))
+        if not cur or until > cur:  # never cut a longer reset short
+            st["claude_backoff_until"] = iso(until)
+        log(f"LIMIT {item['repo']}#{item['pr']}: {e}; new reviews wait until {iso(until)}")
+        if again:
+            item["manual"] = item["manual"] or again_manual
+        return
+    except Exception as e:  # noqa: BLE001 - one bad review must not stop the others
+        item["attempts"] = item.get("attempts", 0) + 1
+        item["retry"] = item.get("retry") if isinstance(item.get("retry"), str) else started
+        item["last_error"] = str(e)[:300]
+        item["not_before"] = iso(now() + RETRY_DELAY)
+        log(f"FAIL {item['repo']}#{item['pr']} attempt {item['attempts']}: {e}")
+        if again:
+            # A new request wants a full review: no reuse of a summary this try posted.
+            item.update(attempts=0, manual=item["manual"] or again_manual, retry=True)
+        elif item["attempts"] >= MAX_ATTEMPTS:
+            give_up(item)
+            failed.append((item, e))
+            queue[:] = [x for x in queue if x is not item]
+        return
+    item.pop("retry", None)
+    item.pop("limited", None)
+    item.pop("limited_since", None)
+    if again:
+        item.update(attempts=0, manual=again_manual)
+        item.pop("not_before", None)
+    elif result == "moved":
+        # Wait a little: a push often comes in a burst, so review the head it settles on.
+        item.update(attempts=0, manual=False, not_before=iso(now() + RETRY_DELAY))
+    else:
+        queue[:] = [x for x in queue if x is not item]
+
+
+def ready(st: dict, item: dict) -> bool:
+    t = now()
+    backoff = parse(st.get("claude_backoff_until"))
+    if backoff and t < backoff:
+        return False
+    nb = parse(item.get("not_before"))
+    return not nb or t >= nb
+
+
+def run_queue(st: dict, dry: bool) -> None:
+    """Poll, then review queued PRs from a worker pool until nothing is left to start.
+    Keeps polling while reviews run, and saves state after every change."""
+    inflight: dict = {}  # future -> item
+    tried: set = set()   # dry run: start each item once
+    failed: list = []
+    next_poll = 0.0
+    for item in st["queue"]:
+        # Left by a run that was killed mid-review: its `pending` status is its own.
+        started = item.pop("running_since", None)
+        if started:
+            item["retry"] = started
+    pool = ThreadPoolExecutor(max_workers=CONCURRENCY, thread_name_prefix="review")
+    try:
+        while True:
+            changed = False
+            if time.monotonic() >= next_poll:
+                poll(st, {id(i) for i in inflight.values()})
+                next_poll = time.monotonic() + POLL_EVERY
+                changed = True
+            busy = {i["repo"] for i in inflight.values()}
+            start = []
+            for item in st["queue"]:
+                if len(inflight) + len(start) >= CONCURRENCY:
+                    break
+                if item["repo"] in busy or id(item) in tried or not ready(st, item):
+                    continue
+                busy.add(item["repo"])
+                start.append(item)
+                if dry:
+                    tried.add(id(item))
+                else:
+                    item["running_since"] = iso(now())
+                    changed = True
+            if changed and not dry:  # saved before the reviews start, so a kill leaves the mark
+                try:
+                    save_state(st)
+                except OSError as e:
+                    log(f"ERROR saving state: {e}")
+            for item in start:
+                inflight[pool.submit(review_locked, dict(item), dry)] = item
+            if not inflight:
+                break
+            done, _ = wait(list(inflight), timeout=max(0.0, next_poll - time.monotonic()),
+                           return_when=FIRST_COMPLETED)
+            for fut in done:
+                item = inflight.pop(fut)
+                if dry:
+                    try:
+                        fut.result()
+                    except Exception as e:  # noqa: BLE001
+                        log(f"FAIL {item['repo']}#{item['pr']} (dry): {e}")
+                    continue
+                try:
+                    finish(st, item, fut, failed)
+                    save_state(st)
+                except Exception as e:  # noqa: BLE001 - keep serving the other reviews
+                    log(f"ERROR saving {item['repo']}#{item['pr']}: {e}")
+    finally:
+        pool.shutdown(wait=True)
+    if failed:
+        if len(failed) == 1:
+            item, e = failed[0]
+            notify(f"Backup review failed 3x on {item['repo']}#{item['pr']}: {str(e)[:100]}")
+        else:
+            names = [f"{i['repo']}#{i['pr']}" for i, _ in failed]
+            shown = []
+            while names and len(", ".join(shown + names[:1])) < 130:  # notify() keeps 190
+                shown.append(names.pop(0))
+            more = f", +{len(names)} more" if names else ""
+            notify(f"Backup review failed 3x on {len(failed)} PRs: {', '.join(shown)}{more}")
+
+
+def main(argv: list[str] | None = None) -> int:
+    argv = sys.argv[1:] if argv is None else argv
+    if not OWNER:
+        log("set REVIEW_FAILOVER_OWNER to your GitHub user or org")
+        return 2
+    dry = "--dry-run" in argv
+    if "--once-pr" in argv:
+        spec = argv[argv.index("--once-pr") + 1]
+        r, n = spec.split("#")
+        repo, pr = r.split("/")[-1], int(n)
+        # No run lock: a manual review may run next to the scheduled one. The repo lock
+        # keeps the two off the same cache clone.
+        try:
+            review_locked({"repo": repo, "pr": pr, "manual": True}, dry)
+            return 0
+        except RuntimeError as e:
+            log(f"FAIL {repo}#{pr}: {e}")
+            return 1
+
+    LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
+    with open(LOCK_FILE, "w") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            log("another run is active; exit")
+            return 0
+        st = load_state()
+        st.setdefault("queue", [])
+        run_queue(st, dry)
+        if not dry:
+            save_state(st)
     return 0
 
 

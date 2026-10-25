@@ -291,13 +291,34 @@ class Failures(Base):
     def test_failure_waits_before_retry_and_counts(self):
         rec = Recorder(delay=0, errors={("a", 1): RuntimeError("boom")})
         self.queue(("a", 1))
-        with mock.patch.object(lr, "review_pr", rec):
+        logs = []
+        with mock.patch.object(lr, "review_pr", rec), mock.patch.object(lr, "log", logs.append):
             lr.main([])
             lr.main([])  # the next launchd run, before the retry delay
         self.assertEqual(len(rec.calls), 1)
+        self.assertNotIn("another run is active; exit", logs)  # the second run really ran
         (item,) = self.state()["queue"]
         self.assertEqual(item["attempts"], 1)
         self.assertIn("not_before", item)
+
+    def test_retry_of_an_auto_item_skips_its_own_pending_status(self):
+        calls = []
+
+        def fake(repo, pr, manual, dry):
+            calls.append(manual)
+            if len(calls) == 1:
+                raise RuntimeError("boom")
+            return "done"
+        lr.save_state({"queue": [{"repo": "a", "pr": 1, "manual": False, "attempts": 0, "key": "a"}],
+                       "last_poll_ok": lr.iso(lr.now())})
+        with mock.patch.object(lr, "review_pr", fake):
+            lr.main([])
+            st = self.state()
+            st["queue"][0]["not_before"] = lr.iso(lr.now() - timedelta(seconds=1))
+            lr.save_state(st)
+            lr.main([])
+        self.assertEqual(calls, [False, True])
+        self.assertEqual(self.state()["queue"], [])
 
     def test_burst_of_final_failures_sends_one_push(self):
         errs = {(r, 1): RuntimeError("boom") for r in "abc"}

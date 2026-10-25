@@ -519,8 +519,9 @@ def poll(st: dict, inflight: set) -> None:
 
 def review_locked(item: dict, dry: bool) -> str:
     # The repo lock also keeps a --once-pr run off a cache clone a worker is using.
+    # A retry skips the head-status check: the failed try left its own `pending` there.
     with file_lock(REPO_LOCKS / f"{item['repo']}.lock"):
-        return review_pr(item["repo"], item["pr"], item["manual"], dry)
+        return review_pr(item["repo"], item["pr"], item["manual"] or item.get("retry", False), dry)
 
 
 def give_up(item: dict) -> None:
@@ -542,6 +543,7 @@ def finish(st: dict, item: dict, fut, failed: list) -> None:
     try:
         result = fut.result()
     except RateLimited as e:
+        item["retry"] = True
         item["not_before"] = iso(e.until)
         st["claude_backoff_until"] = iso(e.until)
         log(f"LIMIT {item['repo']}#{item['pr']}: {e}; new reviews wait until {iso(e.until)}")
@@ -550,6 +552,7 @@ def finish(st: dict, item: dict, fut, failed: list) -> None:
         return
     except Exception as e:  # noqa: BLE001 - one bad review must not stop the others
         item["attempts"] = item.get("attempts", 0) + 1
+        item["retry"] = True
         item["last_error"] = str(e)[:300]
         item["not_before"] = iso(now() + RETRY_DELAY)
         log(f"FAIL {item['repo']}#{item['pr']} attempt {item['attempts']}: {e}")
@@ -560,6 +563,7 @@ def finish(st: dict, item: dict, fut, failed: list) -> None:
             failed.append((item, e))
             queue[:] = [x for x in queue if x is not item]
         return
+    item.pop("retry", None)
     if again:
         item.update(attempts=0, manual=again_manual)
         item.pop("not_before", None)
@@ -649,18 +653,17 @@ def main(argv: list[str] | None = None) -> int:
             return 1
 
     LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
-    lock = open(LOCK_FILE, "w")
-    try:
-        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except BlockingIOError:
-        log("another run is active; exit")
-        return 0
-
-    st = load_state()
-    st.setdefault("queue", [])
-    run_queue(st, dry)
-    if not dry:
-        save_state(st)
+    with open(LOCK_FILE, "w") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            log("another run is active; exit")
+            return 0
+        st = load_state()
+        st.setdefault("queue", [])
+        run_queue(st, dry)
+        if not dry:
+            save_state(st)
     return 0
 
 

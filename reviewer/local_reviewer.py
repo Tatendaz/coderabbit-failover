@@ -570,7 +570,9 @@ def finish(st: dict, item: dict, fut, failed: list) -> None:
         until = limit_wait(item, e.until)
         item["retry"] = True
         item["not_before"] = iso(until)
-        st["claude_backoff_until"] = iso(until)
+        cur = parse(st.get("claude_backoff_until"))
+        if not cur or until > cur:  # never cut a longer reset short
+            st["claude_backoff_until"] = iso(until)
         log(f"LIMIT {item['repo']}#{item['pr']}: {e}; new reviews wait until {iso(until)}")
         if again:
             item["manual"] = item["manual"] or again_manual
@@ -674,8 +676,12 @@ def run_queue(st: dict, dry: bool) -> None:
             item, e = failed[0]
             notify(f"Backup review failed 3x on {item['repo']}#{item['pr']}: {str(e)[:100]}")
         else:
-            names = ", ".join(f"{i['repo']}#{i['pr']}" for i, _ in failed)
-            notify(f"Backup review failed 3x on {len(failed)} PRs: {names}")
+            names = [f"{i['repo']}#{i['pr']}" for i, _ in failed]
+            shown = []
+            while names and len(", ".join(shown + names[:1])) < 130:  # notify() keeps 190
+                shown.append(names.pop(0))
+            more = f", +{len(names)} more" if names else ""
+            notify(f"Backup review failed 3x on {len(failed)} PRs: {', '.join(shown)}{more}")
 
 
 def main(argv: list[str] | None = None) -> int:

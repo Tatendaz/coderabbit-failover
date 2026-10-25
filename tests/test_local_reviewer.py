@@ -271,6 +271,27 @@ class Failures(Base):
         self.assertEqual(rec.calls, [("a", 1, True)])  # b waits for the backoff
         self.notify.assert_not_called()
 
+    def test_shorter_limit_does_not_cut_a_longer_backoff(self):
+        far = lr.now() + timedelta(hours=3)
+        lr.save_state({"queue": [{"repo": "a", "pr": 1, "manual": True, "attempts": 0, "key": "a"}],
+                       "claude_backoff_until": lr.iso(far), "last_poll_ok": lr.iso(lr.now())})
+        st = lr.load_state()
+        fut = mock.Mock()
+        fut.result.side_effect = lr.RateLimited("limit", lr.now() + timedelta(minutes=5))
+        lr.finish(st, st["queue"][0], fut, [])
+        self.assertEqual(st["claude_backoff_until"], lr.iso(far))
+
+    def test_long_burst_push_names_a_few_and_counts_the_rest(self):
+        errs = {(f"repo-with-a-long-name-{n}", 1): RuntimeError("boom") for n in range(12)}
+        rec = Recorder(delay=0, errors=errs)
+        lr.save_state({"queue": [{"repo": r, "pr": 1, "manual": True, "attempts": 2, "key": r}
+                                 for r, _ in errs], "last_poll_ok": lr.iso(lr.now())})
+        with mock.patch.object(lr, "review_pr", rec), mock.patch.object(lr, "CONCURRENCY", 8):
+            lr.main([])
+        msg = self.notify.call_args[0][0]
+        self.assertLessEqual(len(msg), 190)
+        self.assertRegex(msg, r"^Backup review failed 3x on 12 PRs: .+, \+\d+ more$")
+
     def test_killed_run_leaves_a_retry(self):
         calls = []
         lr.save_state({"queue": [{"repo": "a", "pr": 1, "manual": False, "attempts": 0, "key": "a",

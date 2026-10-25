@@ -64,7 +64,7 @@ Needs Python 3.10+ and an authenticated `gh`.
 | `REVIEW_FAILOVER_OWNER` | (required) | GitHub user or org to watch. |
 | `REVIEW_FAILOVER_HOME` | `~/.review-failover` | State, cache, tools. |
 | `REVIEW_FAILOVER_KEYCHAIN` | `claude-code-oauth-token` | Keychain item with the token. |
-| `REVIEW_FAILOVER_NOTIFY` | none | A command that takes one message. Called once per run with every PR that failed 3 tries. |
+| `REVIEW_FAILOVER_NOTIFY` | none | A command that takes one message. Called once per run for the PRs that failed 3 tries (it names the first few, then "+N more"). |
 | `REVIEW_FAILOVER_CONCURRENCY` | `3` | Reviews that run at the same time (1 to 8). One per repo at a time. |
 | `CODERABBIT_LEDGER_DIR` | `~/.claude/coderabbit` | Where the ledger lives. |
 

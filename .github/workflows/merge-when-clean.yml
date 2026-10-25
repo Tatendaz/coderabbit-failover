@@ -56,14 +56,14 @@ jobs:
 
           # 0 when any "from A to B" in the text changes the major version (or the minor of a 0.x).
           is_major() {
-            local a b found=1
+            local a b seen=no
             while read -r a b; do
-              found=0; a=${a#v}; a=${a%.}; b=${b#v}; b=${b%.}
+              seen=yes; a=${a#v}; a=${a%.}; b=${b#v}; b=${b%.}
               [ "${a%%.*}" != "${b%%.*}" ] && return 0
               [ "${a%%.*}" = 0 ] && [ "$(cut -d. -f2 <<<"$a")" != "$(cut -d. -f2 <<<"$b")" ] && return 0
             done < <(grep -oE 'from v?[0-9][0-9A-Za-z.+-]* to v?[0-9][0-9A-Za-z.+-]*' | awk '{print $2, $4}')
             # No version found: treat as major, so a person looks at it.
-            return "$found"
+            [ "$seen" = no ]
           }
 
           check_pr() {

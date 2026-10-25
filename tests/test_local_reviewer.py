@@ -271,23 +271,68 @@ class Failures(Base):
         self.assertEqual(rec.calls, [("a", 1, True)])  # b waits for the backoff
         self.notify.assert_not_called()
 
+    def test_killed_run_leaves_a_retry(self):
+        calls = []
+        lr.save_state({"queue": [{"repo": "a", "pr": 1, "manual": False, "attempts": 0, "key": "a",
+                                  "running_since": lr.iso(lr.now())}],
+                       "last_poll_ok": lr.iso(lr.now())})
+        with mock.patch.object(lr, "review_pr", lambda r, n, m, d: calls.append(m) or "done"):
+            lr.main([])
+        self.assertEqual(calls, [True])  # skips its own stale `pending` status
+        self.assertEqual(self.state()["queue"], [])
+
+    def test_running_review_is_marked_in_saved_state(self):
+        seen = {}
+
+        def fake(repo, pr, manual, dry):
+            seen["q"] = self.state()["queue"]
+            return "done"
+        self.queue(("a", 1))
+        with mock.patch.object(lr, "review_pr", fake):
+            lr.main([])
+        self.assertIn("running_since", seen["q"][0])
+
+    def test_worktree_is_created_under_base_not_tmp(self):
+        cmds = []
+
+        def fake_run(cmd, cwd=None, env=None, inp=None, timeout=300):
+            cmds.append(cmd)
+            return 0, "", ""
+        (self.tmp / "cache/a/.git").mkdir(parents=True)
+        with mock.patch.object(lr, "run", fake_run), \
+                mock.patch.object(lr, "CACHE", self.tmp / "cache"), \
+                mock.patch.object(lr, "WORKTREES", self.tmp / "wts"):
+            wt = lr.prepare_worktree("a", 1, "h")
+        self.assertEqual(wt.parent, self.tmp / "wts")
+        add = next(c for c in cmds if "add" in c)
+        self.assertIn("core.symlinks=false", add)
+
     def test_claude_limit_backoff_is_capped(self):
         e = lr.claude_limit("Claude AI usage limit reached|9999999999")
         self.assertLessEqual(e.until, lr.now() + timedelta(hours=6, seconds=5))
 
-    def test_endless_rate_limits_turn_into_failed_attempts(self):
-        rec = Recorder(delay=0, errors={("a", 1): lr.RateLimited("limit", lr.now() + timedelta(minutes=1))})
+    def test_rate_limit_backoff_doubles_and_gives_up_only_after_a_day(self):
+        rec = Recorder(delay=0, errors={("a", 1): lr.RateLimited("limit")})
         self.queue(("a", 1))
+        waits = []
         with mock.patch.object(lr, "review_pr", rec):
-            for _ in range(lr.MAX_LIMITED + 1):
-                st = self.state()
-                st.pop("claude_backoff_until", None)
-                st["queue"][0].pop("not_before", None)
-                lr.save_state(st)
+            for _ in range(6):
                 lr.main([])
+                st = self.state()
+                (item,) = st["queue"]
+                self.assertEqual(item["attempts"], 0)
+                waits.append(lr.parse(item["not_before"]) - lr.now())
+                st.pop("claude_backoff_until")
+                item.pop("not_before")
+                lr.save_state(st)
+            mins = [round(w.total_seconds() / 60) for w in waits]
+            self.assertEqual(mins, [15, 30, 60, 120, 240, 360])
+            st = self.state()
+            st["queue"][0]["limited_since"] = lr.iso(lr.now() - timedelta(hours=25))
+            lr.save_state(st)
+            lr.main([])
         (item,) = self.state()["queue"]
-        self.assertEqual(item["attempts"], 1)
-        self.assertEqual(item["limited"], lr.MAX_LIMITED + 1)
+        self.assertEqual(item["attempts"], 1)  # a day of limits: now it counts
 
     def test_claude_limit_detection(self):
         epoch = int((datetime.now(timezone.utc) + timedelta(hours=2)).timestamp())
@@ -295,7 +340,8 @@ class Failures(Base):
         self.assertIsInstance(e, lr.RateLimited)
         self.assertEqual(int(e.until.timestamp()), epoch)
         e = lr.claude_limit('API Error: 429 {"type":"rate_limit_error"}')
-        self.assertGreater(e.until, lr.now() + timedelta(minutes=10))
+        self.assertIsNone(e.until)  # no reset time: the caller backs off
+        self.assertIsNone(lr.claude_limit(f"usage limit reached|{epoch - 7 * 3600 * 2}").until)
         self.assertIsNone(lr.claude_limit("claude rc=1: error_max_turns"))
 
     def test_run_claude_raises_rate_limited(self):

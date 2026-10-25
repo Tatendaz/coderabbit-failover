@@ -52,6 +52,9 @@ LOCK_FILE = BASE / ".state/local.lock"
 STATE_LOCK = BASE / ".state/state.lock"
 REPO_LOCKS = BASE / ".state/repo-locks"
 CACHE = BASE / ".cache/repos"
+# Worktrees live under BASE, not in $TMPDIR: the sandbox blocks reads in ~/, so a review
+# can't read another review's worktree. Only its own is opened again in allowRead.
+WORKTREES = BASE / ".worktrees"
 CLAUDE_HOME = BASE / ".claude-home"
 OCR_BIN_DIR = BASE / ".tools/node_modules/.bin"
 # Optional: a command that takes one message argument (e.g. an ntfy/Pushover wrapper).
@@ -65,7 +68,7 @@ PENDING_STALE = timedelta(minutes=40)
 RETRY_DELAY = timedelta(minutes=3)
 CLAUDE_BACKOFF = timedelta(minutes=15)
 CLAUDE_BACKOFF_MAX = timedelta(hours=6)  # the reset time is parsed from output a PR can sway
-MAX_LIMITED = 4  # rate-limited tries per PR before one counts as a failed attempt
+LIMITED_GIVE_UP = timedelta(hours=24)  # after this long rate-limited, a try counts as failed
 POLL_EVERY = 120  # seconds between polls while reviews run (launchd interval is 180)
 
 
@@ -94,9 +97,9 @@ CLAUDE_LIMIT_RE = re.compile(r"usage\s+limit|rate[\s_-]*limit|hit\s+your\s+limit
 
 
 class RateLimited(RuntimeError):
-    """Claude refused for quota. Retry after `until`; not a failed attempt."""
+    """Claude refused for quota. Retry after `until` (None: back off); not a failed attempt."""
 
-    def __init__(self, msg: str, until: datetime):
+    def __init__(self, msg: str, until: datetime | None = None):
         super().__init__(msg)
         self.until = until
 
@@ -313,7 +316,8 @@ def prepare_worktree(repo: str, pr: int, head: str) -> Path:
         if rc != 0:
             raise RuntimeError(f"git {args[0]} failed: {err.strip()[:300]}")
     run(["git", "-C", str(rdir), "worktree", "prune"], env=env)
-    wt = Path(tempfile.mkdtemp(prefix=f"rf-{repo}-{pr}-"))
+    WORKTREES.mkdir(parents=True, exist_ok=True)
+    wt = Path(tempfile.mkdtemp(prefix=f"rf-{repo}-{pr}-", dir=WORKTREES))
     # core.symlinks=false: a link in the PR is checked out as a text file, so it can't point
     # the reviewer at a file outside the worktree.
     rc, _, err = run(["git", "-C", str(rdir), "-c", "core.symlinks=false", "worktree", "add",
@@ -334,10 +338,19 @@ def claude_limit(text: str) -> RateLimited | None:
         return None
     m = re.search(r"\|(\d{10})\b", text)
     until = datetime.fromtimestamp(int(m.group(1)), timezone.utc) if m else None
-    if not until or until < now():
-        until = now() + CLAUDE_BACKOFF
-    until = min(until, now() + CLAUDE_BACKOFF_MAX)
+    if until and until < now():
+        until = None
+    if until:
+        until = min(until, now() + CLAUDE_BACKOFF_MAX)
     return RateLimited(f"claude rate-limited: {text.strip()[-200:]}", until)
+
+
+def limit_wait(item: dict, until: datetime | None) -> datetime:
+    """The stated reset time, or 15 min doubling per limited try, at most 6 hours."""
+    if until:
+        return until
+    step = CLAUDE_BACKOFF * 2 ** min(item.get("limited", 1) - 1, 6)
+    return now() + min(step, CLAUDE_BACKOFF_MAX)
 
 
 def run_claude(wt: Path, repo: str, pr: int, head: str, base: str) -> dict:
@@ -534,7 +547,7 @@ def give_up(item: dict) -> None:
         set_status(item["repo"], info["headRefOid"], "error",
                    "Local backup review failed 3 times. Comment /open-code-review to retry.",
                    item["pr"])
-    except (RuntimeError, KeyError, TypeError):
+    except Exception:  # noqa: BLE001 - best effort; the push still goes out
         pass
 
 
@@ -543,19 +556,22 @@ def finish(st: dict, item: dict, fut, failed: list) -> None:
     queue: list = st["queue"]
     again = item.pop("again", False)
     again_manual = item.pop("again_manual", False)
+    item.pop("running_since", None)
     try:
         try:
             result = fut.result()
         except RateLimited as e:
             item["limited"] = item.get("limited", 0) + 1
-            if item["limited"] > MAX_LIMITED:  # a limit that never clears is a failure
+            item.setdefault("limited_since", iso(now()))
+            if now() - parse(item["limited_since"]) > LIMITED_GIVE_UP:  # it never clears
                 raise RuntimeError(str(e)) from e
             raise
     except RateLimited as e:
+        until = limit_wait(item, e.until)
         item["retry"] = True
-        item["not_before"] = iso(e.until)
-        st["claude_backoff_until"] = iso(e.until)
-        log(f"LIMIT {item['repo']}#{item['pr']}: {e}; new reviews wait until {iso(e.until)}")
+        item["not_before"] = iso(until)
+        st["claude_backoff_until"] = iso(until)
+        log(f"LIMIT {item['repo']}#{item['pr']}: {e}; new reviews wait until {iso(until)}")
         if again:
             item["manual"] = item["manual"] or again_manual
         return
@@ -573,6 +589,8 @@ def finish(st: dict, item: dict, fut, failed: list) -> None:
             queue[:] = [x for x in queue if x is not item]
         return
     item.pop("retry", None)
+    item.pop("limited", None)
+    item.pop("limited_since", None)
     if again:
         item.update(attempts=0, manual=again_manual)
         item.pop("not_before", None)
@@ -599,23 +617,38 @@ def run_queue(st: dict, dry: bool) -> None:
     tried: set = set()   # dry run: start each item once
     failed: list = []
     next_poll = 0.0
+    for item in st["queue"]:
+        # Left by a run that was killed mid-review: its `pending` status is its own.
+        if item.pop("running_since", None):
+            item["retry"] = True
     pool = ThreadPoolExecutor(max_workers=CONCURRENCY, thread_name_prefix="review")
     try:
         while True:
+            changed = False
             if time.monotonic() >= next_poll:
                 poll(st, {id(i) for i in inflight.values()})
                 next_poll = time.monotonic() + POLL_EVERY
-                if not dry:
-                    save_state(st)
+                changed = True
             busy = {i["repo"] for i in inflight.values()}
-            for item in list(st["queue"]):
-                if len(inflight) >= CONCURRENCY:
+            start = []
+            for item in st["queue"]:
+                if len(inflight) + len(start) >= CONCURRENCY:
                     break
                 if item["repo"] in busy or id(item) in tried or not ready(st, item):
                     continue
                 busy.add(item["repo"])
+                start.append(item)
                 if dry:
                     tried.add(id(item))
+                else:
+                    item["running_since"] = iso(now())
+                    changed = True
+            if changed and not dry:  # saved before the reviews start, so a kill leaves the mark
+                try:
+                    save_state(st)
+                except OSError as e:
+                    log(f"ERROR saving state: {e}")
+            for item in start:
                 inflight[pool.submit(review_locked, dict(item), dry)] = item
             if not inflight:
                 break
@@ -629,8 +662,11 @@ def run_queue(st: dict, dry: bool) -> None:
                     except Exception as e:  # noqa: BLE001
                         log(f"FAIL {item['repo']}#{item['pr']} (dry): {e}")
                     continue
-                finish(st, item, fut, failed)
-                save_state(st)
+                try:
+                    finish(st, item, fut, failed)
+                    save_state(st)
+                except Exception as e:  # noqa: BLE001 - keep serving the other reviews
+                    log(f"ERROR saving {item['repo']}#{item['pr']}: {e}")
     finally:
         pool.shutdown(wait=True)
     if failed:

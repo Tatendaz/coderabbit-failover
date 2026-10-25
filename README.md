@@ -79,13 +79,14 @@ It runs only while the Mac is awake, and catches up on wake.
 Reviews run in parallel, up to `REVIEW_FAILOVER_CONCURRENCY`, but never two in one repo at
 once, because they share that repo's cache clone. While reviews run, the reviewer polls again
 every 2 minutes, so a new trigger is queued without waiting for the batch. If Claude reports
-a usage or rate limit, new reviews wait until the limit resets (15 minutes when it gives no
-time, 6 hours at most), and that try does not count as a failure. If a PR's head moves during its review, the
+a usage or rate limit, new reviews wait until the limit resets (when it gives no time: 15
+minutes, doubling each time, 6 hours at most). Those tries count as failures only after 24 hours. If a PR's head moves during its review, the
 new head is reviewed 3 minutes later.
 
 The reviewing Claude can read only the PR checkout, and run only `ocr delegate`,
 `git diff`, `git show` and `git log`. Those commands run in Claude Code's sandbox: no
-network, and no reads in your home folder except this repo's cache clone and `.tools`. Symlinks
+network, and no reads in your home folder except this PR's worktree (under `.worktrees`), this
+repo's cache clone and `.tools`. So a review can't read another review's worktree. Symlinks
 in the PR are checked out as plain files. Its findings are posted publicly, so a prompt
 hidden in PR code must not reach other files on the Mac.
 

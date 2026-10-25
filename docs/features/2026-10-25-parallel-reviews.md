@@ -19,13 +19,17 @@ A `/open-code-review` posted during a batch was not seen until the batch ended.
   finished review, under a state lock.
 - A trigger for a PR under review runs it again when that review ends. A head that moved
   during the review is reviewed 3 minutes later.
-- A Claude usage or rate-limit error pauses new reviews until the reset time (15 minutes if
-  none is given, 6 hours at most) and does not count as a failed attempt. After 4 limited
-  tries on one PR, the next one counts as a failed attempt.
+- A Claude usage or rate-limit error pauses new reviews until the reset time (if none is
+  given: 15 minutes, doubling, 6 hours at most). It counts as a failed attempt only after
+  24 hours of limits on that PR.
+- A review in flight is marked in state before it starts. A run that was killed mid-review
+  leaves the mark, and the next run retries past its own `pending` status.
 - A failed review waits 3 minutes before its next try. All PRs that fail for good in one
   run go out in one phone push.
-- `tests/test_local_reviewer.py`: 22 offline tests, run in the selftest workflow.
+- `tests/test_local_reviewer.py`: 25 offline tests, run in the selftest workflow.
 
 ## Notes
-The read sandbox from #2 is unchanged: each review's `allowRead` is its own worktree, its
-own repo cache, and the OCR tools. A test checks this for two reviews that overlap.
+The read sandbox from #2 is kept: each review's `allowRead` is its own worktree, its own repo
+cache, and the OCR tools. Worktrees moved from `$TMPDIR` to `BASE/.worktrees`, inside the
+blocked `~/`. In `$TMPDIR` a review could read a parallel review's worktree with
+`git diff <dir> <dir>` (git falls back to no-index for paths outside the repo).

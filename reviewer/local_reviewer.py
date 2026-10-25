@@ -560,6 +560,10 @@ def poll(st: dict, inflight: set) -> None:
                     log(f"queued {t['repo']}#{t['pr']} again (review running)")
                 elif q:
                     q["manual"] = q["manual"] or t["manual"]
+                    if t["manual"] and q.get("retry"):
+                        # A new request on a failed item: fresh tries, a full review now.
+                        q.update(attempts=0, retry=True)
+                        q.pop("not_before", None)
                 else:
                     queue.append({**t, "attempts": 0, "queued_at": iso(started)})
                     log(f"queued {t['repo']}#{t['pr']} (manual={t['manual']})")

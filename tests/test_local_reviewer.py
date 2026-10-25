@@ -360,6 +360,18 @@ class Failures(Base):
         self.assertEqual(len(seen), 2)
         self.assertIsNone(seen[1])  # no summary reuse: the new request runs a real review
 
+    def test_new_request_on_a_waiting_failed_item_resets_it(self):
+        lr.save_state({"queue": [{"repo": "a", "pr": 1, "manual": False, "attempts": 2, "key": "a",
+                                  "retry": lr.iso(lr.now()),
+                                  "not_before": lr.iso(lr.now() + timedelta(minutes=3))}],
+                       "last_poll_ok": lr.iso(lr.now())})
+        seen = []
+        self.trigger("a", 1, "c-new")
+        with mock.patch.object(lr, "review_pr",
+                               lambda r, n, m, d, retry_since=None: seen.append((m, retry_since)) or "done"):
+            lr.main([])
+        self.assertEqual(seen, [(True, None)])  # ran now, full review, no summary reuse
+
     def test_killed_run_leaves_a_retry(self):
         calls = []
         lr.save_state({"queue": [{"repo": "a", "pr": 1, "manual": False, "attempts": 0, "key": "a",

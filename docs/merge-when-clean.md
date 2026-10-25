@@ -52,7 +52,8 @@ rules:
 ```
 
 Other paths in this repo, and every other `uses:`, still fall under zizmor's implicit
-`"*": hash-pin`.
+`"*": hash-pin`. From v1.0.1 the shared job never merges a PR that touches the zizmor
+config; the owner merges those.
 
 The tag is a moving ref with write permissions in every caller. Anyone who can move it changes
 what runs in all of them. Only the owner can push to this repo. A tag ruleset that blocks

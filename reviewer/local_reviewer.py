@@ -277,16 +277,21 @@ def run_claude(wt: Path, repo: str, pr: int, head: str, base: str) -> dict:
     CLAUDE_HOME.mkdir(parents=True, exist_ok=True)
     env = {"HOME": str(Path.home()), "PATH": PATH, "LANG": "en_US.UTF-8",
            "CLAUDE_CONFIG_DIR": str(CLAUDE_HOME), "CLAUDE_CODE_OAUTH_TOKEN": token}
+    # Reads stay inside the worktree: findings are posted publicly, so a prompt injected
+    # through PR content must not reach files elsewhere on the Mac.
     tools = ",".join([
-        "Read", "Grep", "Glob",
+        "Read(./**)", "Grep(./**)", "Glob(./**)",
         "Bash(ocr delegate preview:*)", "Bash(ocr delegate rule:*)",
         "Bash(git diff:*)", "Bash(git show:*)", "Bash(git log:*)",
     ])
+    # --output writes any file; --no-index diffs (reads) any file.
+    denied = ",".join(["Bash(git *--output*)", "Bash(git *--no-index*)"])
     cmd = ["claude", "-p", PROMPT.format(pr=pr, repo=f"{OWNER}/{repo}", head=head, base=base),
            "--model", MODEL, "--effort", EFFORT,
            "--output-format", "json", "--json-schema", json.dumps(SCHEMA),
            "--setting-sources", "user", "--strict-mcp-config", "--disable-slash-commands",
-           "--no-session-persistence", "--max-turns", "80", "--allowedTools", tools]
+           "--no-session-persistence", "--max-turns", "80", "--allowedTools", tools,
+           "--disallowedTools", denied]
     rc, out, err = run(cmd, cwd=wt, env=env, timeout=1800)
     try:
         data = json.loads(out)

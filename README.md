@@ -74,6 +74,11 @@ Needs Python 3.10+ and an authenticated `gh`.
 It only covers repos you own that are not archived and not forks. Fork PRs are skipped.
 It runs only while the Mac is awake, and catches up on wake.
 
+The reviewing Claude can read only the PR checkout, and run only `ocr delegate`,
+`git diff`, `git show` and `git log` (never with `--output` or `--no-index`). Its
+findings are posted publicly, so a prompt hidden in PR code must not reach other files
+on the Mac.
+
 | Status | Meaning |
 |---|---|
 | `pending` | Review running. |

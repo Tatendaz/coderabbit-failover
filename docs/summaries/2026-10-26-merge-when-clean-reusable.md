@@ -16,6 +16,9 @@
 - actionlint and zizmor (strict, online) clean.
 
 ## Decisions
+- Coordinator change 2026-10-26: callers pin `@merge-when-clean-v1` (moving major tag), not a
+  sha, with a zizmor `ref-pin` policy for `Tatendaz/coderabbit-failover/*` only. Release steps
+  went into `docs/merge-when-clean.md`.
 - Concurrency lives in the reusable job, not in the caller: two holders of the same group
   deadlock.
 - The status-success `if` and the triggers stay in the caller, so a non-success status never

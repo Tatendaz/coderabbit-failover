@@ -101,9 +101,9 @@ hidden in PR code must not reach other files on the Mac.
 
 ## Merge when clean (reusable workflow)
 
-Repos call `.github/workflows/reusable-merge-when-clean.yml`, pinned to a tagged sha. It merges
-a PR once CI is green, a real review ran on the head and no thread is open. Caller example and
-tests: [docs/merge-when-clean.md](docs/merge-when-clean.md).
+Repos call `.github/workflows/reusable-merge-when-clean.yml` at the tag `merge-when-clean-v1`. It merges
+a PR once CI is green, a real review ran on the head and no thread is open. Caller example,
+release steps and tests: [docs/merge-when-clean.md](docs/merge-when-clean.md).
 
 ## Limits
 

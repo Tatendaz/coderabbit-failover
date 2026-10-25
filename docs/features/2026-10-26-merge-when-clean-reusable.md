@@ -10,13 +10,13 @@ script against a fake `gh` in CI.
 
 ## Why
 Each repo had its own copy of the job. It needed 6 fixes in one day, and each fix was copied
-into about 25 repos by hand, with no tests. Now repos call this one file, pinned to a commit
-sha, and Dependabot bumps the pin.
+into about 25 repos by hand, with no tests. Now repos call this one file at the major tag
+`merge-when-clean-v1`, and a fix ships with one merge and a tag move.
 
 ## What changed
 - The script is template v7, with two changes for `workflow_call`:
   - The job's own check run is now named `<caller job> / Merge when clean`, so the filter
-    also skips names that end in ` / Merge when clean`.
+    also skips names that end in " / Merge when clean" (with the leading space).
   - `.github/workflows/reusable-merge-when-clean.yml` joins the paths the owner merges.
 - Input `runs-on` (JSON, default `"ubuntu-latest"`). Private repos pass
   `'["self-hosted","macOS","ARM64"]'`.
@@ -26,4 +26,6 @@ sha, and Dependabot bumps the pin.
   They run on Ubuntu and macOS, and on macOS also with `/bin/bash` 3.2.
 
 ## Notes
-Tag the merge commit `merge-when-clean-v1.0.0`. Callers pin that sha.
+Tag the merge commit `merge-when-clean-v1.0.0` and point the major tag `merge-when-clean-v1`
+at it. Callers pin `@merge-when-clean-v1`, so a later fix ships with one merge and a tag move,
+not one Dependabot PR per repo. Release steps: `docs/merge-when-clean.md`.

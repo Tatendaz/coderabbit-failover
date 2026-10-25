@@ -1,9 +1,11 @@
 name: Merge when clean (reusable)
 
 # Shared merge-when-clean job. Each repo calls it from a short
-# `.github/workflows/merge-when-clean.yml` that pins this file to a full commit sha:
+# `.github/workflows/merge-when-clean.yml` that pins this file to the major tag:
 #
-#   uses: Tatendaz/coderabbit-failover/.github/workflows/reusable-merge-when-clean.yml@<sha> # merge-when-clean-v1.0.0
+#   uses: Tatendaz/coderabbit-failover/.github/workflows/reusable-merge-when-clean.yml@merge-when-clean-v1
+#
+# Release steps (new v1.x.y tag, then move merge-when-clean-v1): docs/merge-when-clean.md.
 #
 # Merges an open PR into the default branch once it is clean on its head commit:
 #   1. every check run and commit status finished green,

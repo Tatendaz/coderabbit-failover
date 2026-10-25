@@ -85,7 +85,7 @@ new head is reviewed 3 minutes later.
 
 The reviewing Claude can read only the PR checkout, and run only `ocr delegate`,
 `git diff`, `git show` and `git log`. Those commands run in Claude Code's sandbox: no
-network, and no reads in your home folder except this PR's worktree (under `.worktrees`), this
+network, and no reads in your home folder except this PR's worktree (under `.worktrees/<repo>`), this
 repo's cache clone and `.tools`. So a review can't read another review's worktree. Symlinks
 in the PR are checked out as plain files. Its findings are posted publicly, so a prompt
 hidden in PR code must not reach other files on the Mac.

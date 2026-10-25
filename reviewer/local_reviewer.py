@@ -302,7 +302,12 @@ def head_status(repo: str, sha: str) -> tuple[str | None, datetime | None]:
 
 
 def prepare_worktree(repo: str, pr: int, head: str) -> Path:
+    """Caller holds the repo lock, so any worktree left in WORKTREES/<repo> is stale."""
     CACHE.mkdir(parents=True, exist_ok=True)
+    wroot = WORKTREES / repo
+    if wroot.is_dir():
+        for old in wroot.iterdir():  # left by a killed run
+            shutil.rmtree(old, ignore_errors=True)
     rdir = CACHE / repo
     env = {**os.environ, "PATH": PATH}
     if not (rdir / ".git").exists():
@@ -316,8 +321,8 @@ def prepare_worktree(repo: str, pr: int, head: str) -> Path:
         if rc != 0:
             raise RuntimeError(f"git {args[0]} failed: {err.strip()[:300]}")
     run(["git", "-C", str(rdir), "worktree", "prune"], env=env)
-    WORKTREES.mkdir(parents=True, exist_ok=True)
-    wt = Path(tempfile.mkdtemp(prefix=f"rf-{repo}-{pr}-", dir=WORKTREES))
+    wroot.mkdir(parents=True, exist_ok=True)
+    wt = Path(tempfile.mkdtemp(prefix=f"rf-{pr}-", dir=wroot))
     # core.symlinks=false: a link in the PR is checked out as a text file, so it can't point
     # the reviewer at a file outside the worktree.
     rc, _, err = run(["git", "-C", str(rdir), "-c", "core.symlinks=false", "worktree", "add",

@@ -320,11 +320,17 @@ class Failures(Base):
             cmds.append(cmd)
             return 0, "", ""
         (self.tmp / "cache/a/.git").mkdir(parents=True)
+        stale = self.tmp / "wts/a/rf-9-old"
+        other = self.tmp / "wts/a-b/rf-1-live"  # repo "a-b" must not be swept by repo "a"
+        stale.mkdir(parents=True)
+        other.mkdir(parents=True)
         with mock.patch.object(lr, "run", fake_run), \
                 mock.patch.object(lr, "CACHE", self.tmp / "cache"), \
                 mock.patch.object(lr, "WORKTREES", self.tmp / "wts"):
             wt = lr.prepare_worktree("a", 1, "h")
-        self.assertEqual(wt.parent, self.tmp / "wts")
+        self.assertEqual(wt.parent, self.tmp / "wts/a")
+        self.assertFalse(stale.exists())
+        self.assertTrue(other.exists())
         add = next(c for c in cmds if "add" in c)
         self.assertIn("core.symlinks=false", add)
 

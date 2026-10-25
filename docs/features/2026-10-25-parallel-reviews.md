@@ -30,6 +30,7 @@ A `/open-code-review` posted during a batch was not seen until the batch ended.
 
 ## Notes
 The read sandbox from #2 is kept: each review's `allowRead` is its own worktree, its own repo
-cache, and the OCR tools. Worktrees moved from `$TMPDIR` to `BASE/.worktrees`, inside the
-blocked `~/`. In `$TMPDIR` a review could read a parallel review's worktree with
+cache, and the OCR tools. Worktrees moved from `$TMPDIR` to `BASE/.worktrees/<repo>`, inside
+the blocked `~/`. A new review clears its repo's folder first (under the repo lock), so a
+killed run leaves nothing behind for long. In `$TMPDIR` a review could read a parallel review's worktree with
 `git diff <dir> <dir>` (git falls back to no-index for paths outside the repo).

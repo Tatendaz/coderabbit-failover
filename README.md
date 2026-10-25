@@ -19,6 +19,7 @@ on the head commit.
 | `scripts/coderabbit_budget.py` | The ledger: `run`, `check`, `record-limit`, `failover`, queue, `selftest`. |
 | `scripts/coderabbit_status.py` | Reads a PR and says if CodeRabbit really reviewed the head. |
 | `reviewer/local_reviewer.py` | The backup reviewer. |
+| `tests/test_local_reviewer.py` | Offline tests for the reviewer's worker pool, locks and backoff. |
 | `launchd/review-failover.plist.template` | Runs the reviewer every 3 minutes. |
 
 ## Install the skill
@@ -63,7 +64,8 @@ Needs Python 3.10+ and an authenticated `gh`.
 | `REVIEW_FAILOVER_OWNER` | (required) | GitHub user or org to watch. |
 | `REVIEW_FAILOVER_HOME` | `~/.review-failover` | State, cache, tools. |
 | `REVIEW_FAILOVER_KEYCHAIN` | `claude-code-oauth-token` | Keychain item with the token. |
-| `REVIEW_FAILOVER_NOTIFY` | none | A command that takes one message, called after 3 failed tries. |
+| `REVIEW_FAILOVER_NOTIFY` | none | A command that takes one message. Called once per run for the PRs that failed 3 tries (it names the first few, then "+N more"). |
+| `REVIEW_FAILOVER_CONCURRENCY` | `3` | Reviews that run at the same time (1 to 8). One per repo at a time. |
 | `CODERABBIT_LEDGER_DIR` | `~/.claude/coderabbit` | Where the ledger lives. |
 
 ### What starts a backup review
@@ -74,9 +76,17 @@ Needs Python 3.10+ and an authenticated `gh`.
 It only covers repos you own that are not archived and not forks. Fork PRs are skipped.
 It runs only while the Mac is awake, and catches up on wake.
 
+Reviews run in parallel, up to `REVIEW_FAILOVER_CONCURRENCY`, but never two in one repo at
+once, because they share that repo's cache clone. While reviews run, the reviewer polls again
+every 2 minutes, so a new trigger is queued without waiting for the batch. If Claude reports
+a usage or rate limit, new reviews wait until the limit resets (when it gives no time: 15
+minutes, doubling each time, 6 hours at most). Those tries count as failures only after 24 hours. If a PR's head moves during its review, the
+new head is reviewed 3 minutes later.
+
 The reviewing Claude can read only the PR checkout, and run only `ocr delegate`,
 `git diff`, `git show` and `git log`. Those commands run in Claude Code's sandbox: no
-network, and no reads in your home folder except this repo's cache clone and `.tools`. Symlinks
+network, and no reads in your home folder except this PR's worktree (under `.worktrees/<repo>`), this
+repo's cache clone and `.tools`. So a review can't read another review's worktree. Symlinks
 in the PR are checked out as plain files. Its findings are posted publicly, so a prompt
 hidden in PR code must not reach other files on the Mac.
 

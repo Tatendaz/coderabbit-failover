@@ -477,7 +477,9 @@ def posted_summary(repo: str, pr: int, head: str, since: datetime) -> dict | Non
                     f"repos/{OWNER}/{repo}/issues/{pr}/comments?since={iso(since)}&per_page=100")
     for page in pages or []:
         for c in page:
-            m = SUMMARY_RE.search(c.get("body") or "")
+            # Only the last line: the body above it holds model text, which could fake a marker.
+            lines = (c.get("body") or "").rstrip().splitlines()
+            m = SUMMARY_RE.fullmatch(lines[-1].strip()) if lines else None
             if (m and m.group(1) == head and _me[0]
                     and (c.get("user") or {}).get("login") == _me[0]
                     and parse(c.get("created_at")) >= since):

@@ -257,8 +257,10 @@ def prepare_worktree(repo: str, pr: int, head: str) -> Path:
             raise RuntimeError(f"git {args[0]} failed: {err.strip()[:300]}")
     run(["git", "-C", str(rdir), "worktree", "prune"], env=env)
     wt = Path(tempfile.mkdtemp(prefix=f"rf-{repo}-{pr}-"))
-    rc, _, err = run(["git", "-C", str(rdir), "worktree", "add", "--detach", "--force",
-                      str(wt), head], env=env, timeout=900)
+    # core.symlinks=false: a link in the PR is checked out as a text file, so it can't point
+    # the reviewer at a file outside the worktree.
+    rc, _, err = run(["git", "-C", str(rdir), "-c", "core.symlinks=false", "worktree", "add",
+                      "--detach", "--force", str(wt), head], env=env, timeout=900)
     if rc != 0:
         shutil.rmtree(wt, ignore_errors=True)
         raise RuntimeError(f"worktree failed: {err.strip()[:300]}")
@@ -275,18 +277,39 @@ def run_claude(wt: Path, repo: str, pr: int, head: str, base: str) -> dict:
     if not token:
         raise RuntimeError(f"no Keychain item '{KC_SERVICE}'")
     CLAUDE_HOME.mkdir(parents=True, exist_ok=True)
-    env = {"HOME": str(Path.home()), "PATH": PATH, "LANG": "en_US.UTF-8",
+    # The cache is a blob:none clone and the sandbox has no network, so fetch the blobs both
+    # diffs need here, before Claude runs. Run from the cache (no worktree, so no PR
+    # .gitattributes) with no external diff or textconv. --numstat still reads every blob but
+    # prints only counts and quoted paths, so non-UTF-8 file content can't break run()'s decode.
+    for rng in ([f"origin/{base}", head], [f"origin/{base}...{head}"]):
+        rc, _, err = run(["git", "-C", str(CACHE / repo), "diff", "--no-ext-diff", "--no-textconv",
+                          "--numstat", *rng],
+                         env={**os.environ, "PATH": PATH}, timeout=900)
+        if rc != 0:
+            raise RuntimeError(f"blob prefetch failed: {err.strip()[:300]}")
+    # GIT_CONFIG_GLOBAL: the sandbox below hides ~/.gitconfig, and git exits if it can't read it.
+    env = {"HOME": str(Path.home()), "PATH": PATH, "LANG": "en_US.UTF-8", "GIT_CONFIG_GLOBAL": "/dev/null",
            "CLAUDE_CONFIG_DIR": str(CLAUDE_HOME), "CLAUDE_CODE_OAUTH_TOKEN": token}
+    # Reads stay inside the worktree: findings are posted publicly, so a prompt injected
+    # through PR content must not reach files elsewhere on the Mac. The tool rules cover
+    # Read/Grep/Glob; the OS sandbox covers git and ocr, which take paths of their own
+    # (`git diff ~/.ssh/id_ed25519 /dev/null` reads outside the repo without --no-index).
+    sandbox = {"sandbox": {"enabled": True, "allowUnsandboxedCommands": False, "filesystem": {
+        "denyRead": ["~/", "/Volumes/"],
+        "allowRead": [str(wt), str(CACHE / repo), str(OCR_BIN_DIR.parent.parent)]}}}
     tools = ",".join([
-        "Read", "Grep", "Glob",
+        "Read(./**)", "Grep(./**)", "Glob(./**)",
         "Bash(ocr delegate preview:*)", "Bash(ocr delegate rule:*)",
         "Bash(git diff:*)", "Bash(git show:*)", "Bash(git log:*)",
     ])
+    # --output writes any file; --no-index diffs (reads) any file.
+    denied = ",".join(["Bash(git *--output*)", "Bash(git *--no-index*)"])
     cmd = ["claude", "-p", PROMPT.format(pr=pr, repo=f"{OWNER}/{repo}", head=head, base=base),
            "--model", MODEL, "--effort", EFFORT,
            "--output-format", "json", "--json-schema", json.dumps(SCHEMA),
            "--setting-sources", "user", "--strict-mcp-config", "--disable-slash-commands",
-           "--no-session-persistence", "--max-turns", "80", "--allowedTools", tools]
+           "--no-session-persistence", "--max-turns", "80", "--allowedTools", tools,
+           "--disallowedTools", denied, "--settings", json.dumps(sandbox)]
     rc, out, err = run(cmd, cwd=wt, env=env, timeout=1800)
     try:
         data = json.loads(out)

@@ -22,7 +22,7 @@ into about 25 repos by hand, with no tests. Now repos call this one file at the 
   `'["self-hosted","macOS","ARM64"]'`.
 - The job sets its own permissions and holds the `merge-when-clean` concurrency group.
   Callers must not use that group name.
-- 51 cases, each with a mutant (a small break in the script) that the case must catch.
+- 52 cases, each with a mutant (a small break in the script) that the case must catch.
   They run on Ubuntu and macOS, and on macOS also with `/bin/bash` 3.2.
 
 ## Notes

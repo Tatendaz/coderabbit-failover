@@ -111,9 +111,12 @@ def routes_for(prs, hold=None, overrides=None):
             "changed_files": changed, "mergeable_state": p["mergeable_state"]}}
         r[f"repos/{REPO}/pulls/{n}/files"] = {"pages": [[
             {"filename": f, "previous_filename": prev or None} for f, prev in p["files"]]]}
+        # Two check runs per page, so a read without --paginate misses some.
+        pages = [p["checks"][i:i + 2] for i in range(0, len(p["checks"]), 2)] or [[]]
         r[f"repos/{REPO}/commits/{sha}/check-runs"] = {"pages": [
-            {"total_count": len(p["checks"]), "check_runs": p["checks"]}]}
+            {"total_count": len(p["checks"]), "check_runs": page} for page in pages]}
         r[f"repos/{REPO}/commits/{sha}/statuses"] = {"pages": [p["statuses"]]}
+        r[f"merge:{n}"] = {}
         r[f"graphql:{n}"] = {"json": {"data": {"repository": {"pullRequest": {
             "reviewDecision": p["decision"],
             "latestOpinionatedReviews": {"nodes": [{"state": s} for s in p["opinions"]]},
@@ -403,6 +406,13 @@ def own_merge_job_check_ignored(run):
            check("merge / Merge when clean", "queued", None)]
     r = run([make_pr(5, checks=[check("CI")] + own)])
     assert r.merged == [5], r
+
+
+@case('gh api --paginate "repos/$REPO/commits/$sha/check-runs', 'gh api "repos/$REPO/commits/$sha/check-runs')
+def failed_check_on_second_page_not_merged(run):
+    checks = [check("build"), check("lint"), check("e2e", conclusion="failure")]
+    r = run([make_pr(5, checks=checks)])
+    assert_not_merged(r, says="checks=3 pending=0 failed=1")
 
 
 @case('map(max_by(.started_at))', 'map(min_by(.started_at))')

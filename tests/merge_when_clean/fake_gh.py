@@ -3,9 +3,10 @@
 
 Serves fixture JSON from $FAKE_GH_ROUTES and logs every call to $FAKE_GH_LOG.
 Routes are keyed by API path without the query string, `graphql:<pr>` for the
-review query, and `merge:<pr>` for `gh pr merge`. A route is one of:
+review query, and `merge:<pr>` for `gh pr merge` ({} = merge works). A route is one of:
   {"json": obj}, {"pages": [obj, ...]}, {"raw": "text"}, {"error": "message"}.
-`--jq` runs the real jq on each page, like gh does. A missing route fails loudly.
+Without `--paginate` only the first page is served. `--jq` runs the real jq on each
+page, like gh does. A missing route fails loudly.
 """
 import json
 import os
@@ -41,7 +42,10 @@ def main():
     pos, opts = parse(argv)
 
     if pos[:2] == ["pr", "merge"]:
-        spec = routes.get(f"merge:{pos[2]}", {})
+        spec = routes.get(f"merge:{pos[2]}")
+        if spec is None:
+            print(f"fake gh: no route for merge:{pos[2]}", file=sys.stderr)
+            return 1
         if "error" in spec:
             print(spec["error"], file=sys.stderr)
             return 1
@@ -65,6 +69,8 @@ def main():
         sys.stdout.write(spec["raw"])
         return 0
     pages = spec["pages"] if "pages" in spec else [spec["json"]]
+    if "--paginate" not in opts:
+        pages = pages[:1]
     jq = opts.get("--jq")
     for page in pages:
         if jq:

@@ -17,7 +17,7 @@
 
 ## Decisions
 - Coordinator change 2026-10-26: callers pin `@merge-when-clean-v1` (moving major tag), not a
-  sha, with a zizmor `ref-pin` policy for `Tatendaz/coderabbit-failover/*` only. Release steps
+  sha, with a zizmor `ref-pin` policy (later narrowed to the one workflow path). Release steps
   went into `docs/merge-when-clean.md`.
 - Concurrency lives in the reusable job, not in the caller: two holders of the same group
   deadlock.
